@@ -1,0 +1,59 @@
+{
+    // See https://go.microsoft.com/fwlink/?LinkId=733558
+    // for the documentation about the tasks.json format
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "launchInferenceContainer",
+            "type": "shell",
+            "isBackground": false,
+            "command": [
+                "export DISPLAY=:0;",
+                "xhost +si:localuser:root;",
+                "export CWD=\"/root/inferencing\";",
+                "export ROOT_CWD=\"/home/omartin/proj/inferencing\";",
+                "export DOCKER_ARGS=\"--privileged --rm -d --name lab -v $ROOT_CWD:$CWD -v /tmp/.X11-unix:/tmp/.X11-unix -e DISPLAY=:0 -p8888:8888 -p5678:5678\";",
+                "export CMD=\"python3 -m ptvsd --host 0.0.0.0 --port 5678 --wait $CWD/webcam_detection_full.py\";",
+                "export CMD_ARGS=\"--camera_index 1 --frozen_graph_path $CWD/frozen_inference_graph.pb --label_map_path $CWD/label_map.pbtxt --num_labels 2 --debug\";",
+                "echo args=$DOCKER_ARGS;",
+                // "docker run --privileged --rm -d --name lab -v ~/proj/inferencing:/root/inferencing -v /tmp/.X11-unix:/tmp/.X11-unix -e DISPLAY=:0 -p8888:8888 -p5678:5678 tf113opencv:latest python3 -m ptvsd --host 0.0.0.0 --port 5678 --wait /root/inferencing/webcam_detection_full.py --camera_index 1 --frozen_graph_path ./frozen_inference_graph.pb --label_map_path ./label_map.pbtxt --num_labels 2 --debug;",
+                // "docker run --privileged --rm -d --name lab -v ~/proj/inferencing:$cwd -v /tmp/.X11-unix:/tmp/.X11-unix -e DISPLAY=:0 -p8888:8888 -p5678:5678 tf113opencv:latest python3 -m ptvsd --host 0.0.0.0 --port 5678 --wait $cwd/webcam_detection_full.py $args;",
+                "docker run $DOCKER_ARGS tf113opencv:latest $CMD $CMD_ARGS;",
+                "echo 'Waiting 2 seconds to connect...';",
+                "sleep 2;",
+                "echo 'Ready to connect...';"
+            ],
+            "options": {
+                "shell": {
+                    "executable": "/bin/bash",
+                    "args": [
+                        "-c"
+                    ]
+                }
+            },
+            "problemMatcher": [
+                "$eslint-compact"
+            ]
+        },
+        {
+            "label": "stopInferenceContainer",
+            "type": "shell",
+            "isBackground": false,
+            "command": [
+                "docker stop lab;",
+            ],
+            "options": {
+                "shell": {
+                    "executable": "/bin/bash",
+                    "args": [
+                        "-c"
+                    ]
+                }
+            },
+            "problemMatcher": [
+                "$eslint-compact"
+            ]
+        }
+
+    ]
+}
