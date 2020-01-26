@@ -4,7 +4,7 @@ import tensorflow as tf
 import cv2
 from utils import label_map_util
 from utils import visualization_utils as vis_util
-from constant import LOGGER_OBJECT_DETECTOR_MAIN, LOGGER_OBJECT_DETECTOR_LOAD_MODEL
+from constant import LOGGER_OBJECT_DETECTOR_MAIN, LOGGER_OBJECT_DETECTOR_LOAD_MODEL, OBJECT_DETECTOR_CONFIG_DICT
 
 log = RoboLogger.getLogger()
 log.warning(LOGGER_OBJECT_DETECTOR_MAIN, msg="Initial imports are completed.")
@@ -13,17 +13,20 @@ log.warning(LOGGER_OBJECT_DETECTOR_MAIN, msg="Initial imports are completed.")
 class ObjectDetector(object):
     """ main class for the object detector running on the jetson """
 
-    def __init__(self, camera_index: int, frozen_graph_path: str, label_map_path: str, num_classes: int) -> None:
-        self._camera_index = camera_index
-        self.frozen_graph_path = frozen_graph_path
-        self.num_classes = num_classes
-        self.label_map_path = label_map_path
+    def __init__(self, configuration: dict) -> None:
+        """camera_index: int, frozen_graph_path: str, label_map_path: str, num_classes: int) -> None:"""
+        self._camera_index = configuration[OBJECT_DETECTOR_CONFIG_DICT]['camera_index']
+        self.frozen_graph_path = configuration[OBJECT_DETECTOR_CONFIG_DICT]['frozen_graph_path']
+        self.num_classes = configuration[OBJECT_DETECTOR_CONFIG_DICT]['num_classes']
+        self.label_map_path = configuration[OBJECT_DETECTOR_CONFIG_DICT]['label_map_path']
 
     def load_model(self) -> None:
-        log.info(LOGGER_OBJECT_DETECTOR_LOAD_MODEL, f'Connecting to camera {self._camera_index}')
+        log.warning(LOGGER_OBJECT_DETECTOR_LOAD_MODEL,
+                    f'Connecting to camera {self._camera_index}')
         self.cap = cv2.VideoCapture(self._camera_index)
 
-        log.info(LOGGER_OBJECT_DETECTOR_LOAD_MODEL, f'Rehydrating inference graph in memory...')
+        log.warning(LOGGER_OBJECT_DETECTOR_LOAD_MODEL,
+                    f'Rehydrating inference graph in memory...')
 
         # Load a (frozen) Tensorflow model into memory.
         self.detection_graph = tf.Graph()
@@ -32,6 +35,8 @@ class ObjectDetector(object):
             with tf.gfile.GFile(self.frozen_graph_path, 'rb') as fid:
                 serialized_graph = fid.read()
                 od_graph_def.ParseFromString(serialized_graph)
+                log.warning(LOGGER_OBJECT_DETECTOR_LOAD_MODEL,
+                            msg=f'Loading model in memory...')
                 tf.import_graph_def(od_graph_def, name='')
 
         # Loading label map
@@ -55,15 +60,20 @@ class ObjectDetector(object):
                     # Expand dimensions since the model expects images to have shape: [1, None, None, 3]
                     image_np_expanded = np.expand_dims(image_np, axis=0)
                     # Extract image tensor
-                    image_tensor = self.detection_graph.get_tensor_by_name('image_tensor:0')
+                    image_tensor = self.detection_graph.get_tensor_by_name(
+                        'image_tensor:0')
                     # Extract detection boxes
-                    boxes = self.detection_graph.get_tensor_by_name('detection_boxes:0')
+                    boxes = self.detection_graph.get_tensor_by_name(
+                        'detection_boxes:0')
                     # Extract detection scores
-                    scores = self.detection_graph.get_tensor_by_name('detection_scores:0')
+                    scores = self.detection_graph.get_tensor_by_name(
+                        'detection_scores:0')
                     # Extract detection classes
-                    classes = self.detection_graph.get_tensor_by_name('detection_classes:0')
+                    classes = self.detection_graph.get_tensor_by_name(
+                        'detection_classes:0')
                     # Extract number of detections
-                    num_detections = self.detection_graph.get_tensor_by_name('num_detections:0')
+                    num_detections = self.detection_graph.get_tensor_by_name(
+                        'num_detections:0')
                     # Actual detection
                     (boxes, scores, classes, num_detections) = sess.run(
                         [boxes, scores, classes, num_detections],
@@ -80,7 +90,8 @@ class ObjectDetector(object):
                             use_normalized_coordinates=True,
                             line_thickness=8)
                         # Display output
-                        cv2.imshow('object detection', cv2.resize(image_np, (1024, 576)))
+                        cv2.imshow('object detection',
+                                   cv2.resize(image_np, (1024, 576)))
                         if cv2.waitKey(5) & 0xFF == ord('q'):
                             cv2.destroyAllWindows()
                             break
