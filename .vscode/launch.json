@@ -5,7 +5,7 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "webcam_detection",
+            "name": "Jetson:Object Detector",
             "type": "python",
             "request": "attach",
             "port": 5678,
