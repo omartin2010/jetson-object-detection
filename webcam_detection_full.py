@@ -1,3 +1,7 @@
+from logger import RoboLogger
+log = RoboLogger.getLogger()
+from constant import LOGGER_OBJECT_DETECTOR_STARTUP
+log.warning(LOGGER_OBJECT_DETECTOR_STARTUP, msg='Launching imports...')
 import numpy as np
 import os
 import sys
@@ -6,13 +10,11 @@ import tarfile
 import tensorflow as tf
 import zipfile
 import cv2
-
-# from collections import defaultdict
-# from io import StringIO
 from matplotlib import pyplot as plt
 from PIL import Image
 from utils import label_map_util
 from utils import visualization_utils as vis_util
+log.warning(LOGGER_OBJECT_DETECTOR_STARTUP, msg="Initial imports are completed.")
 
 
 def main():
@@ -66,9 +68,9 @@ def main():
                 scores = detection_graph.get_tensor_by_name('detection_scores:0')
                 # Extract detection classes
                 classes = detection_graph.get_tensor_by_name('detection_classes:0')
-                # Extract number of detectionsd
+                # Extract number of detections
                 num_detections = detection_graph.get_tensor_by_name('num_detections:0')
-                # Actual detection.
+                # Actual detection
                 (boxes, scores, classes, num_detections) = sess.run(
                     [boxes, scores, classes, num_detections],
                     feed_dict={image_tensor: image_np_expanded})
@@ -83,7 +85,7 @@ def main():
                     line_thickness=8)
 
                 # Display output
-                cv2.imshow('object detection', cv2.resize(image_np, (800, 600)))
+                cv2.imshow('object detection', cv2.resize(image_np, (1024, 576)))
 
                 if cv2.waitKey(5) & 0xFF == ord('q'):
                     cv2.destroyAllWindows()

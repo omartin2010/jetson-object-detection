@@ -1,0 +1,19 @@
+{
+    "mqtt":{
+        "brokerIP" : "192.168.32.50",
+        "brokerPort" : 1883,
+        "brokerProto" : "tcp",
+        "subscribedTopics":["bot/camera/detectobject",
+                            "bot/killSwitch",
+                            "bot/logger"],
+        "publishingTopics":["client/moveBaseFeedback",
+                            "client/moveEndEffectorFeedback",
+                            "client/ErrorHandling"]
+    },
+    "object_detector":{
+        "camera_index" : 1,
+        "frozen_graph_path" : "frozen_inference_graph.pb",
+        "label_map_path" : "label_map.pbtxt",
+        "num_labels" : 2
+    }
+}
