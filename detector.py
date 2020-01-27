@@ -1,3 +1,11 @@
+from logger import RoboLogger
+log = RoboLogger.getLogger()
+from constant import LOGGER_OBJECT_DETECTOR_MAIN, LOGGER_OBJECT_DETECTOR_LOAD_MODEL, \
+    OBJECT_DETECTOR_CONFIG_DICT, LOGGER_OBJECT_DETECTOR_MQTT_LOOP, LOGGER_OBJECT_DETECTOR_RUNNER, \
+    LOGGER_OBJECT_DETECTOR_ASYNC_LOOP, MAX_WORKER_THREADS, LOGGER_OBJECT_DETECTOR_ASYNC_PROCESS_MQTT, \
+    LOGGER_OBJECT_DETECTOR_KILL_SWITCH
+log.warning(LOGGER_OBJECT_DETECTOR_MAIN,
+            msg="About to initialize libraries (tensorflow + opencv)")
 from utils import visualization_utils as vis_util
 from utils import label_map_util
 import asyncio
@@ -10,14 +18,6 @@ import paho.mqtt.client as mqtt
 import threading
 import traceback
 import queue
-from logger import RoboLogger
-from constant import LOGGER_OBJECT_DETECTOR_MAIN, LOGGER_OBJECT_DETECTOR_LOAD_MODEL, \
-    OBJECT_DETECTOR_CONFIG_DICT, LOGGER_OBJECT_DETECTOR_MQTT_LOOP, LOGGER_OBJECT_DETECTOR_RUNNER, \
-    LOGGER_OBJECT_DETECTOR_ASYNC_LOOP, MAX_WORKER_THREADS, LOGGER_OBJECT_DETECTOR_ASYNC_PROCESS_MQTT, \
-    LOGGER_OBJECT_DETECTOR_KILL_SWITCH
-log = RoboLogger.getLogger()
-log.warning(LOGGER_OBJECT_DETECTOR_MAIN,
-            msg="About to initialize libraries (tensorflow + opencv)")
 log.warning(LOGGER_OBJECT_DETECTOR_MAIN, msg="Libraries loaded.")
 
 
@@ -32,6 +32,7 @@ class ObjectDetector(object):
         self.num_classes = configuration[OBJECT_DETECTOR_CONFIG_DICT]['num_classes']
         self.label_map_path = configuration[OBJECT_DETECTOR_CONFIG_DICT]['label_map_path']
         self.mqttMessageQueue = queue.Queue()
+        self.exceptionQueue = queue.Queue()
         self._readyForInferencing = False
 
     def run(self) -> None:
@@ -280,8 +281,10 @@ class ObjectDetector(object):
                         if not self._readyForInferencing:
                             log.error(LOGGER_OBJECT_DETECTOR_ASYNC_PROCESS_MQTT, 'Model not loaded yet in memory... come back later.')
                         else:
+                            thresh = msgdict['threshold']
                             boxes, scores, classes, num_detections = self.run_detection(show_video=False, loop=False)
                             # publish output to MQTT for retrieval by the caller...
+                            # FIX TO GET BOXES > threshold
                             log.info(LOGGER_OBJECT_DETECTOR_ASYNC_PROCESS_MQTT, msg=f'Output : {boxes}, {scores}, {classes}, {num_detections}')
 
                     elif currentMQTTMoveMessage.topic == 'bot/logger':
