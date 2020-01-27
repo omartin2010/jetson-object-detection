@@ -43,11 +43,8 @@ def main():
         signal.signal(signal.SIGTERM, sigterm_handler)
         objectDetector = ObjectDetector(robotJetsonConfiguration)
         log.warning(LOGGER_OBJECT_DETECTOR_STARTUP,
-                    msg='Launching object detector load_model...')
-        objectDetector.load_model()
-        log.warning(LOGGER_OBJECT_DETECTOR_STARTUP,
-                    msg='Launching object detector run inference loop...')
-        objectDetector.run_detection_loop(show_video=True)
+                    msg='Launching runner.')
+        objectDetector.run()
 
     except SystemExit:
         log.info(LOGGER_OBJECT_DETECTOR_STARTUP, 'Caught SystemExit...')
@@ -84,7 +81,7 @@ def graceful_shutdown():
 
 
 if __name__ == "__main__":
-    main()  # robot_config_file=robot_config_file)
+    main()
     time.sleep(10)
     log.info(LOGGER_OBJECT_DETECTOR_STARTUP, "Done")
     try:
