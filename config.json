@@ -4,6 +4,7 @@
         "brokerPort" : 1883,
         "brokerProto" : "tcp",
         "subscribedTopics":["bot/jetson/detectSingleObject",
+                            "bot/jetson/detectObjectDisplayVideo",
                             "bot/killSwitch",
                             "bot/logger"],
         "publishingTopics":["client/moveBaseFeedback",
@@ -12,8 +13,8 @@
     },
     "object_detector":{
         "camera_index" : 1,
-        "frozen_graph_path" : "frozen_inference_graph.pb",
-        "label_map_path" : "label_map.pbtxt",
+        "frozen_graph_path" : "model/frozen_inference_graph.pb",
+        "label_map_path" : "model/label_map.pbtxt",
         "num_classes" : 2
     }
 }
