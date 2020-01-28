@@ -57,6 +57,12 @@ class ObjectDetector(object):
                 target=self.threadImplEventLoop, name="asyncioEventLoop")
             self.eventLoopThread.start()
 
+            log.warning(LOGGER_OBJECT_DETECTOR_RUNNER,
+                        msg='Loading model...')
+            self.load_model()
+            log.warning(LOGGER_OBJECT_DETECTOR_RUNNER,
+                        msg='Model loaded, ready for inferencing')
+
             while True:
                 try:
                     exc = self.exceptionQueue.get(block=True)
@@ -193,127 +199,52 @@ class ObjectDetector(object):
             'num_detections:0')
         return image_tensor, boxes, scores, classes, num_detections
 
-# region dead code
-    # def run_detection(self, show_video=False, loop=False):
-    #     """
-    #     returns object detection
-    #     params :
-    #     show_video:bool:for debugging, requires a monitor (or x redirect over network which doesn't work)
-    #                     only relevant if loop=True. Othrewise has no effect.
-    #     loop:bool:if true, loops indefinitely and doesn't go out. False, sends a single pixels set back
-    #     returns:if loop=false, returns boxes, scores, classes, num_detections. Otherwise doesn't return.
-    #     """
-    #     if not self._readyForInferencing:
-    #         log.error(LOGGER_OBJECT_DETECTOR_ASYNC_PROCESS_MQTT,
-    #                   msg='Model not loaded yet in memory... come back later.')
-    #     else:
-    #         with self.detection_graph.as_default():
-    #             with tf.Session(graph=self.detection_graph) as sess:
-    #                 if loop:
-    #                     loop_time = 0
-    #                     # average time over N entries before logging to avoid filling screen with logs
-    #                     logging_loops = 5
-    #                     n_loops = 0
-    #                     while True:
-    #                         image_tensor, boxes, scores, classes, num_detections = self._get_tensors()
-    #                         # Read frame from camera
-    #                         ret, image_np = self.cap.read()
-    #                         # Expand dimensions since the model expects images to have shape: [1, None, None, 3]
-    #                         image_np_expanded = np.expand_dims(
-    #                             image_np, axis=0)
-    #                         # Actual detection
-    #                         start_time = time.time()
-    #                         (boxes, scores, classes, num_detections) = sess.run(
-    #                             [boxes, scores, classes, num_detections],
-    #                             feed_dict={image_tensor: image_np_expanded})
-    #                         end_time = time.time()
-    #                         loop_time += (end_time - start_time)
-    #                         n_loops += 1
-    #                         if n_loops % logging_loops == 0:
-    #                             loop_time /= logging_loops
-    #                             log.debug(LOGGER_OBJECT_DETECTOR_RUN_DETECTION,
-    #                                       msg=f'Average loop for the past {logging_loops} iteration is {loop_time:.3f}s')
-    #                             loop_time = 0
-    #                         if show_video:
-    #                             # Visualization of the results of a detection.
-    #                             vis_util.visualize_boxes_and_labels_on_image_array(
-    #                                 image_np,
-    #                                 np.squeeze(boxes),
-    #                                 np.squeeze(classes).astype(np.int32),
-    #                                 np.squeeze(scores),
-    #                                 self.category_index,
-    #                                 use_normalized_coordinates=True,
-    #                                 line_thickness=4)
-    #                             # Display output
-    #                             cv2.imshow('object detection',
-    #                                        cv2.resize(image_np, (1024, 576)))
-    #                             if cv2.waitKey(5) & 0xFF == ord('q'):
-    #                                 cv2.destroyAllWindows()
-    #                                 break
-    #                 else:
-    #                     image_tensor, boxes, scores, classes, num_detections = self._get_tensors()
-    #                     # Read frame from camera
-    #                     start_time = time.time()
-    #                     ret, image_np = self.cap.read()
-    #                     start_time = time.time()
-    #                     end_time = time.time()
-    #                     log.debug(LOGGER_OBJECT_DETECTOR_RUN_DETECTION,
-    #                               msg=f'Image capture time took {(end_time - start_time):.4f} seconds.')
-    #                     # Expand dimensions since the model expects images to have shape: [1, None, None, 3]
-    #                     image_np_expanded = np.expand_dims(image_np, axis=0)
-    #                     # Actual detection
-    #                     start_time = time.time()
-    #                     (boxes, scores, classes, num_detections) = sess.run(
-    #                         [boxes, scores, classes, num_detections],
-    #                         feed_dict={image_tensor: image_np_expanded})
-    #                     end_time = time.time()
-    #                     log.debug(LOGGER_OBJECT_DETECTOR_RUN_DETECTION,
-    #                               msg=f'Inference took {(end_time - start_time):.4f} seconds.')
-    #                     return boxes, scores, classes, num_detections
-
-    #     def __del__(self) -> None:
-    #         pass
-# endregion
-
     def threadImplEventLoop(self):
         """
         Main event asyncio eventloop launched in a separate thread
         """
         try:
-            log.warning(LOGGER_OBJECT_DETECTOR_ASYNC_LOOP, msg=f'Launching main event loop')
+            log.warning(LOGGER_OBJECT_DETECTOR_ASYNC_LOOP,
+                        msg=f'Launching main event loop')
             self.eventLoop = asyncio.new_event_loop()
             self.eventLoopMainExecutors = concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKER_THREADS, thread_name_prefix='MainThreadPool')
+            # self.asyncInferenceTask = self.eventLoop.create_task(self.asyncRunDetection(loopDelay=0.1))
             self.asyncImplProcessMQTTMessage = self.eventLoop.create_task(self.asyncProcessMQTTMessages(loopDelay=0.1))
-            self.asyncInferenceTask = self.eventLoop.create_task(self.asyncRunDetection(loopDelay=0.1))
-            self.eventLoop.run_in_executor(self.eventLoopMainExecutors, self.load_model())
-            log.warning(LOGGER_OBJECT_DETECTOR_ASYNC_LOOP, msg=f'Done launching main event loop')
+            # Load model and add call back to run run_detection when done... task.add_done_callback(self.asyncRunDetection(...))
+            self.asyncImplProcessMQTTMessage.add_done_callback
+            self.eventLoop.run_in_executor(self.eventLoopMainExecutors, self.runDetection())
+            log.warning(LOGGER_OBJECT_DETECTOR_ASYNC_LOOP,
+                        msg=f'Done launching main event loop')
             self.eventLoop.run_forever()
 
         except Exception:
-            log.error(LOGGER_OBJECT_DETECTOR_ASYNC_LOOP, f'Error : {traceback.print_exc()}')
+            log.error(LOGGER_OBJECT_DETECTOR_ASYNC_LOOP,
+                      f'Error : {traceback.print_exc()}')
         finally:
             self.eventLoop.stop()
             self.eventLoop.close()
 
-    async def asyncRunDetection(self, loopDelay=0.10):
+    def runDetection(self, loopDelay=0.10):
         """
         returns object detection
         params :
         delay:float:delay to pause between frames scoring
         returns:task
         """
+        logging_loops = 50
+        n_loops = 0
+        # Loop while model not loaded...
+        while not self._readyForInferencing:
+            if n_loops % logging_loops == 0:
+                log.warning(
+                    LOGGER_OBJECT_DETECTOR_ASYNC_RUN_DETECTION, msg=f'Waiting until model is loaded.')
+            n_loops += 1
+            time.sleep(loopDelay)
+
         with self.detection_graph.as_default():
             with tf.Session(graph=self.detection_graph) as sess:
                 log.warning(LOGGER_OBJECT_DETECTOR_ASYNC_RUN_DETECTION,
                             msg='In context for detector.')
-                logging_loops = 50
-                n_loops = 0
-                # Loop while model not loaded...
-                while not self._readyForInferencing:
-                    if n_loops % logging_loops:
-                        log.warning(LOGGER_OBJECT_DETECTOR_ASYNC_RUN_DETECTION, msg=f'Waiting until model is loaded.')
-                    n_loops += 1
-                    asyncio.sleep(loopDelay)
                 loop_time = 0
                 n_loops = 0
                 # Launch the loop
@@ -337,7 +268,7 @@ class ObjectDetector(object):
                         log.debug(LOGGER_OBJECT_DETECTOR_ASYNC_RUN_DETECTION,
                                   msg=f'Average loop for the past {logging_loops} iteration is {loop_time:.3f}s')
                         loop_time = 0
-                    await asyncio.sleep(loopDelay)
+                    time.sleep(loopDelay)
                     if self.show_video:
                         # Visualization of the results of a detection.
                         vis_util.visualize_boxes_and_labels_on_image_array(
@@ -361,7 +292,8 @@ class ObjectDetector(object):
         It is implemented in another thread so that the killswitch can kill
         the thread without knowing which specific
         """
-        log.warning(LOGGER_OBJECT_DETECTOR_ASYNC_PROCESS_MQTT, msg='Launching MQTT processing async task')
+        log.warning(LOGGER_OBJECT_DETECTOR_ASYNC_PROCESS_MQTT,
+                    msg='Launching MQTT processing async task')
         while True:
             try:
                 await asyncio.sleep(loopDelay)
@@ -400,7 +332,7 @@ class ObjectDetector(object):
 
                     elif currentMQTTMoveMessage.topic == 'bot/jetson/detectObjectDisplayVideo':
                         log.info(LOGGER_OBJECT_DETECTOR_ASYNC_PROCESS_MQTT,
-                                 msg='Launching video on screen (NEED A DISPLAY CONNECTED!) - press q on connected keyboard to stop display')
+                                 msg='Showing Video on screen (NEED A DISPLAY CONNECTED!)')
                         if 'show_video' in msgdict:
                             show_video = msgdict['show_video']
                         else:
