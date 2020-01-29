@@ -5,7 +5,6 @@ import paho.mqtt.client as mqtt
 import numpy as np
 import tensorflow as tf
 import cv2
-import concurrent.futures
 import json
 import time
 import asyncio
@@ -13,8 +12,8 @@ from utils import label_map_util
 from utils import visualization_utils as vis_util
 from constant import LOGGER_OBJECT_DETECTOR_MAIN, LOGGER_OBJECT_DETECTOR_LOAD_MODEL, \
     OBJECT_DETECTOR_CONFIG_DICT, LOGGER_OBJECT_DETECTOR_MQTT_LOOP, LOGGER_OBJECT_DETECTOR_RUNNER, \
-    LOGGER_OBJECT_DETECTOR_ASYNC_LOOP, MAX_WORKER_THREADS, LOGGER_OBJECT_DETECTOR_ASYNC_PROCESS_MQTT, \
-    LOGGER_OBJECT_DETECTOR_KILL_SWITCH, LOGGER_OBJECT_DETECTOR_ASYNC_RUN_DETECTION
+    LOGGER_OBJECT_DETECTOR_ASYNC_LOOP, LOGGER_OBJECT_DETECTOR_ASYNC_PROCESS_MQTT, \
+    LOGGER_OBJECT_DETECTOR_KILL_SWITCH, LOGGER_OBJECT_DETECTOR_RUN_DETECTION
 from logger import RoboLogger
 log = RoboLogger.getLogger()
 log.warning(LOGGER_OBJECT_DETECTOR_MAIN,
@@ -47,21 +46,22 @@ class ObjectDetector(object):
             log.warning(LOGGER_OBJECT_DETECTOR_RUNNER,
                         msg='Launching MQTT thread.')
             self.threadMQTT = threading.Thread(
-                target=self.threadImplMQTT, name="MQTTListener")
+                target=self.threadImplMQTT, name='MQTTListener')
             self.threadMQTT.start()
 
             # Launch main event loop in a separate thread
             log.warning(LOGGER_OBJECT_DETECTOR_RUNNER,
                         msg='Launching event loop')
             self.eventLoopThread = threading.Thread(
-                target=self.threadImplEventLoop, name="asyncioEventLoop")
+                target=self.threadImplEventLoop, name='asyncioEventLoop')
             self.eventLoopThread.start()
 
+            # Launch detector in a separate thread
             log.warning(LOGGER_OBJECT_DETECTOR_RUNNER,
-                        msg='Loading model...')
-            self.load_model()
-            log.warning(LOGGER_OBJECT_DETECTOR_RUNNER,
-                        msg='Model loaded, ready for inferencing')
+                        msg='Launching Detector Thread')
+            self.detectorThread = threading.Thread(
+                target=self.runDetection(loopDelay=0.10), name='ObjectDetector')
+            self.detectorThread.start()
 
             while True:
                 try:
@@ -149,13 +149,6 @@ class ObjectDetector(object):
         log.warning(LOGGER_OBJECT_DETECTOR_LOAD_MODEL,
                     f'Connecting to camera {self._camera_index}')
         self.cap = cv2.VideoCapture(self._camera_index)
-
-        log.warning(LOGGER_OBJECT_DETECTOR_LOAD_MODEL,
-                    f'Rehydrating inference graph in memory...')
-
-        # Load a (frozen) Tensorflow model into memory.
-        log.warning(LOGGER_OBJECT_DETECTOR_ASYNC_RUN_DETECTION,
-                    msg='Model not loaded yet in memory.')
         self.detection_graph = tf.Graph()
         with self.detection_graph.as_default():
             od_graph_def = tf.GraphDef()
@@ -165,7 +158,7 @@ class ObjectDetector(object):
                 log.warning(LOGGER_OBJECT_DETECTOR_LOAD_MODEL,
                             msg=f'Loading model in memory...')
                 tf.import_graph_def(od_graph_def, name='')
-        log.warning(LOGGER_OBJECT_DETECTOR_ASYNC_RUN_DETECTION,
+        log.warning(LOGGER_OBJECT_DETECTOR_LOAD_MODEL,
                     msg='Model loaded in memory.')
         # Loading label map
         # Label maps map indices to category names, so that when our convolution network predicts `5`,
@@ -204,18 +197,12 @@ class ObjectDetector(object):
         Main event asyncio eventloop launched in a separate thread
         """
         try:
-            log.warning(LOGGER_OBJECT_DETECTOR_ASYNC_LOOP,
-                        msg=f'Launching main event loop')
+            log.warning(LOGGER_OBJECT_DETECTOR_ASYNC_LOOP, msg=f'Launching asyncio event loop')
             self.eventLoop = asyncio.new_event_loop()
-            self.eventLoopMainExecutors = concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKER_THREADS, thread_name_prefix='MainThreadPool')
-            # self.asyncInferenceTask = self.eventLoop.create_task(self.asyncRunDetection(loopDelay=0.1))
-            self.asyncImplProcessMQTTMessage = self.eventLoop.create_task(self.asyncProcessMQTTMessages(loopDelay=0.1))
-            # Load model and add call back to run run_detection when done... task.add_done_callback(self.asyncRunDetection(...))
-            self.asyncImplProcessMQTTMessage.add_done_callback
-            self.eventLoop.run_in_executor(self.eventLoopMainExecutors, self.runDetection())
-            log.warning(LOGGER_OBJECT_DETECTOR_ASYNC_LOOP,
-                        msg=f'Done launching main event loop')
+            asyncio.set_event_loop(self.eventLoop)
+            self.eventLoop.create_task(self.asyncProcessMQTTMessages(loopDelay=0.25))
             self.eventLoop.run_forever()
+            log.warning(LOGGER_OBJECT_DETECTOR_ASYNC_LOOP, msg=f'Asyncio event loop started')
 
         except Exception:
             log.error(LOGGER_OBJECT_DETECTOR_ASYNC_LOOP,
@@ -231,20 +218,13 @@ class ObjectDetector(object):
         delay:float:delay to pause between frames scoring
         returns:task
         """
-        logging_loops = 50
-        n_loops = 0
-        # Loop while model not loaded...
-        while not self._readyForInferencing:
-            if n_loops % logging_loops == 0:
-                log.warning(
-                    LOGGER_OBJECT_DETECTOR_ASYNC_RUN_DETECTION, msg=f'Waiting until model is loaded.')
-            n_loops += 1
-            time.sleep(loopDelay)
+        self.load_model()
 
         with self.detection_graph.as_default():
             with tf.Session(graph=self.detection_graph) as sess:
-                log.warning(LOGGER_OBJECT_DETECTOR_ASYNC_RUN_DETECTION,
+                log.warning(LOGGER_OBJECT_DETECTOR_RUN_DETECTION,
                             msg='In context for detector.')
+                logging_loops = 50
                 loop_time = 0
                 n_loops = 0
                 # Launch the loop
@@ -265,10 +245,12 @@ class ObjectDetector(object):
                     n_loops += 1
                     if n_loops % logging_loops == 0:
                         loop_time /= logging_loops
-                        log.debug(LOGGER_OBJECT_DETECTOR_ASYNC_RUN_DETECTION,
+                        log.debug(LOGGER_OBJECT_DETECTOR_RUN_DETECTION,
                                   msg=f'Average loop for the past {logging_loops} iteration is {loop_time:.3f}s')
                         loop_time = 0
                     time.sleep(loopDelay)
+                    # if not self.show_video:
+                    #     cv2.destroyAllWindows()
                     if self.show_video:
                         # Visualization of the results of a detection.
                         vis_util.visualize_boxes_and_labels_on_image_array(
@@ -283,20 +265,19 @@ class ObjectDetector(object):
                         cv2.imshow('object detection',
                                    cv2.resize(image_np, (1024, 576)))
                         if cv2.waitKey(1) & 0xFF == ord('q'):
-                            cv2.destroyAllWindows()
-                            break
+                            # cv2.destroyAllWindows()
+                            cv2.destroyWindow('object detection')
+                            self.show_video = False
+                            # break
 
     async def asyncProcessMQTTMessages(self, loopDelay=0.25):
         """
-        This function receives the messages from MQTT to move the robot.
-        It is implemented in another thread so that the killswitch can kill
-        the thread without knowing which specific
+        This function receives the messages from MQTT to run various functions on the Jetson
         """
         log.warning(LOGGER_OBJECT_DETECTOR_ASYNC_PROCESS_MQTT,
                     msg='Launching MQTT processing async task')
         while True:
             try:
-                await asyncio.sleep(loopDelay)
                 if self.mqttMessageQueue.empty() is False:
                     # Remove the first in the list, will pause until there is something
                     currentMQTTMoveMessage = self.mqttMessageQueue.get()
@@ -344,6 +325,8 @@ class ObjectDetector(object):
                         log.setLevel(msgdict['logger'], lvl=msgdict['level'])
                     else:
                         raise NotImplementedError
+                await asyncio.sleep(loopDelay)
+
             except NotImplementedError:
                 log.warning(LOGGER_OBJECT_DETECTOR_ASYNC_PROCESS_MQTT,
                             f'MQTT topic not implemented.')
