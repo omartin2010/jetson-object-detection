@@ -5,3 +5,5 @@ A subsent of a project to do object detection (toy detection really) on a jetson
 - [X] ~~MQTT~~
 - [X] ~~Async event loop~~
 - [ ] Need to fix to get boxes > threshold... and return info to caller (via MQTT queues)
+- [ ] Add support for K4A (Kinect for Azure - with Submodule)
+- [ ] modify code to read images for scoring via the K4A drivers
