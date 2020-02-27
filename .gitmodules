@@ -1,0 +1,3 @@
+[submodule "py-k4a"]
+	path = py-k4a
+	url = git@github.com:omartin2010/py-k4a.git
