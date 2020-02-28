@@ -264,13 +264,13 @@ class ObjectDetector(object):
                         if ret == k4a.K4A_WAIT_RESULT_SUCCEEDED:
                             img = k4a.capture_get_color_image(capture)
                             if img:
-                                image_np = k4a.image_get_buffer(img)
-                                # rows = k4a.image_get_width_pixels(img)
-                                # columns = k4a.image_get_height_pixels(img)
-                                # cv2.
-                                cv2.crea
+                                img_buffer = k4a.image_get_buffer(img)
+                                rows = k4a.image_get_height_pixels(img)
+                                columns = k4a.image_get_width_pixels(img)
+                                image_np = np.array(img_buffer, dtype=np.uint8).reshape(rows, columns, 4)
+                                # Drop Alpha channel (4 channels = R G B + Alpha)
+                                image_np = image_np[:, :, :3]
                                 k4a.image_release(img)
-                            
 
                         # openCV : ret, image_np = self.cap.read()
                         # Expand dimensions since the model expects images to have shape: [1, None, None, 3]
