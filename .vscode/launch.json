@@ -18,6 +18,20 @@
                 }
             ],
             "postDebugTask": "stopInferenceContainer"
+        },
+        {
+            "name": "Jetson:Object Detector Connect Only",
+            "type": "python",
+            "request": "attach",
+            "port": 5678,
+            "host": "localhost",
+            "pathMappings": [
+                {
+                    "localRoot":"${workspaceFolder}",
+                    "remoteRoot": "/root/inferencing"
+                }
+            ],
         }
+
     ]
 }

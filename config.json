@@ -18,7 +18,7 @@
         "num_classes" : 2,
         "k4a_device" :{
             "color_format": "K4A_IMAGE_FORMAT_COLOR_BGRA32",
-            "color_resolution" : "K4A_COLOR_RESOLUTION_2160P",
+            "color_resolution" : "K4A_COLOR_RESOLUTION_720P",
             "depth_mode": "K4A_DEPTH_MODE_WFOV_UNBINNED",
             "camera_fps": "K4A_FRAMES_PER_SECOND_15",
             "synchronized_images_only" : "True"
