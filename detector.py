@@ -6,7 +6,8 @@ import numpy as np
 import tensorflow as tf
 import cv2
 import json
-import k4a
+from pyk4a import PyK4A, K4AException    # , K4ATimeoutException
+from pyk4a import Config as k4aConf
 import time
 import asyncio
 from constant import K4A_DEFINITIONS
@@ -37,8 +38,13 @@ class ObjectDetector(object):
         self.label_map_path = configuration[OBJECT_DETECTOR_CONFIG_DICT]['label_map_path']
         self.mqttMessageQueue = queue.Queue()
         self.exceptionQueue = queue.Queue()
-        self.k4a_device = k4a.Device()
-        self.k4a_device_config = k4a.DeviceConfiguration()
+        k4a_config_dict = self.configuration['object_detector']['k4a_device']
+        self.k4a_device = PyK4A(
+            k4aConf(color_resolution=k4a_config_dict['color_resolution'],
+                    depth_mode=k4a_config_dict['depth_mode'],
+                    camera_fps=k4a_config_dict['camera_fps'],
+                    synchronized_images_only=k4a_config_dict['synchronized_images_only'],
+                    color_format=k4a_config_dict["color_format"]))
         self._readyForInferencing = False
         # defaults to false, put to true for debugging (need video display)
         self.show_video = False
@@ -50,23 +56,9 @@ class ObjectDetector(object):
         """
         try:
             # Initialize the Kinect Device
-            if k4a.device_open(0, self.k4a_device):
-                serial = k4a.device_get_serialnum(self.k4a_device)
-                version = k4a.device_get_version(self.k4a_device)
-                log.warning(LOGGER_OBJECT_DETECTOR_RUNNER,
-                            f'Opened K4A device {serial} running version {version}')
-                log.warning(LOGGER_OBJECT_DETECTOR_RUNNER,
-                            f'Building configuration for device')
-                k4a_config_dict = self.configuration["object_detector"]["k4a_device"]
-                self.k4a_device_config.color_format = k4a_config_dict["color_format"]
-                self.k4a_device_config.color_resolution = k4a_config_dict["color_resolution"]
-                self.k4a_device_config.depth_mode = k4a_config_dict["depth_mode"]
-                self.k4a_device_config.camera_fps = k4a_config_dict["camera_fps"]
-                self.k4a_device_config.synchronized_images_only = k4a_config_dict["synchronized_images_only"]
-            else:
-                raise Exception(f'Problem initializing the Kinect Device.')
+            self.k4a_device.connect()
             log.warning(LOGGER_OBJECT_DETECTOR_RUNNER,
-                        msg=f'Initialized Kinect Device')
+                        msg=f'K4A device initialized...')
             # Launch the MQTT thread listener
             log.warning(LOGGER_OBJECT_DETECTOR_RUNNER,
                         msg='Launching MQTT thread.')
@@ -107,6 +99,11 @@ class ObjectDetector(object):
         except SystemExit:
             # raise the exception up the stack
             raise
+
+        except K4AException:
+            log.error(LOGGER_OBJECT_DETECTOR_RUNNER,
+                      f'Error with K4A : {traceback.print_exc()}')
+
         except Exception:
             log.error(LOGGER_OBJECT_DETECTOR_RUNNER,
                       f'Error : {traceback.print_exc()}')
@@ -255,61 +252,55 @@ class ObjectDetector(object):
                 loop_time = 0
                 n_loops = 0
                 # Launch the loop
-                if k4a.device_start_cameras(self.k4a_device, self.k4a_device_config):
-                    while True:
-                        image_tensor, boxes, scores, classes, num_detections = self._get_tensors()
-                        # Read frame from camera
-                        capture = k4a.Capture()
-                        ret = k4a.device_get_capture(self.k4a_device, capture, 1000)
-                        if ret == k4a.K4A_WAIT_RESULT_SUCCEEDED:
-                            img = k4a.capture_get_color_image(capture)
-                            if img:
-                                img_buffer = k4a.image_get_buffer(img)
-                                rows = k4a.image_get_height_pixels(img)
-                                columns = k4a.image_get_width_pixels(img)
-                                image_np = np.array(img_buffer, dtype=np.uint8).reshape(rows, columns, 4)
-                                # Drop Alpha channel (4 channels = R G B + Alpha)
-                                image_np = image_np[:, :, :3]
-                                k4a.image_release(img)
-
-                        # openCV : ret, image_np = self.cap.read()
-                        # Expand dimensions since the model expects images to have shape: [1, None, None, 3]
-                        image_np_expanded = np.expand_dims(
-                            image_np, axis=0)
-                        # Actual detection
-                        start_time = time.time()
-                        (boxes, scores, classes, num_detections) = sess.run(
-                            [boxes, scores, classes, num_detections],
-                            feed_dict={image_tensor: image_np_expanded})
-                        end_time = time.time()
-                        loop_time += (end_time - start_time)
-                        n_loops += 1
-                        if n_loops % logging_loops == 0:
-                            loop_time /= logging_loops
-                            log.debug(LOGGER_OBJECT_DETECTOR_RUN_DETECTION,
-                                      msg=f'Average loop for the past {logging_loops} iteration is {loop_time:.3f}s')
-                            loop_time = 0
-                        time.sleep(loopDelay)
-                        # if not self.show_video:
-                        #     cv2.destroyAllWindows()
-                        if self.show_video:
-                            # Visualization of the results of a detection.
-                            vis_util.visualize_boxes_and_labels_on_image_array(
-                                image_np,
-                                np.squeeze(boxes),
-                                np.squeeze(classes).astype(np.int32),
-                                np.squeeze(scores),
-                                self.category_index,
-                                use_normalized_coordinates=True,
-                                line_thickness=4)
-                            # Display output
-                            cv2.imshow('object detection',
-                                       cv2.resize(image_np, (1024, 576)))
-                            if cv2.waitKey(1) & 0xFF == ord('q'):
-                                # cv2.destroyAllWindows()
-                                cv2.destroyWindow('object detection')
-                                self.show_video = False
-                                # break
+                # if k4a.device_start_cameras(self.k4a_device, self.k4a_device_config):
+                while True:
+                    image_tensor, boxes, scores, classes, num_detections = self._get_tensors()
+                    # Read frame from camera
+                    image_color_np, image_depth_np = self.k4a_device.get_capture(color_only=False)
+                    # Ignore the Alpha channel
+                    # image_color_np = image_color_np[:, :, :3]
+                    # capture.k4a_capture_release()
+                    # openCV : ret, image_np = self.cap.read()
+                    # Expand dimensions since the model expects images to have shape: [1, None, None, 3]
+                    image_np_expanded = np.expand_dims(
+                        image_color_np[:, :, :3], axis=0)
+                    # Actual detection
+                    start_time = time.time()
+                    (boxes, scores, classes, num_detections) = sess.run(
+                        [boxes, scores, classes, num_detections],
+                        feed_dict={image_tensor: image_np_expanded})
+                    end_time = time.time()
+                    loop_time += (end_time - start_time)
+                    n_loops += 1
+                    if n_loops % logging_loops == 0:
+                        loop_time /= logging_loops
+                        log.debug(LOGGER_OBJECT_DETECTOR_RUN_DETECTION,
+                                  msg=f'Average loop for the past {logging_loops} iteration is {loop_time:.3f}s')
+                        loop_time = 0
+                    time.sleep(loopDelay)
+                    # if not self.show_video:
+                    #     cv2.destroyAllWindows()
+                    if self.show_video:
+                        # Visualization of the results of a detection.
+                        vis_util.visualize_boxes_and_labels_on_image_array(
+                            image_color_np,
+                            np.squeeze(boxes),
+                            np.squeeze(classes).astype(np.int32),
+                            np.squeeze(scores),
+                            self.category_index,
+                            use_normalized_coordinates=True,
+                            line_thickness=4)
+                        # Display output
+                        cv2.imshow('object detection',
+                                   cv2.resize(image_color_np, (1024, 576)))
+                        cv2.imshow('depth view',
+                                   cv2.resize(image_depth_np, (1024, 576)), cmap='gray')
+                        if cv2.waitKey(1) & 0xFF == ord('q'):
+                            # cv2.destroyAllWindows()
+                            cv2.destroyWindow('object detection')
+                            cv2.destroyWindow('depth view')
+                            self.show_video = False
+                            # break
 
     async def asyncProcessMQTTMessages(self, loopDelay=0.25):
         """
