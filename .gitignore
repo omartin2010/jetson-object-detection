@@ -1,5 +1,10 @@
 **/__pycache__/*
 *.pyc
 .ipynb_checkpoints/*
+*-checkpoint.ipynb
 .vscode/settings.json
 .vscode/.ropeproject
+lib*.so.*
+lib*.so*
+launch.json
+tasks.json
