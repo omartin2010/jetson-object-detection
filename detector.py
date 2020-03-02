@@ -257,11 +257,8 @@ class ObjectDetector(object):
                     image_tensor, boxes, scores, classes, num_detections = self._get_tensors()
                     # Read frame from camera
                     image_color_np, image_depth_np = self.k4a_device.get_capture(color_only=False)
-                    # Ignore the Alpha channel
-                    # image_color_np = image_color_np[:, :, :3]
-                    # capture.k4a_capture_release()
-                    # openCV : ret, image_np = self.cap.read()
-                    # Expand dimensions since the model expects images to have shape: [1, None, None, 3]
+                    # Expand dimensions since the model expects images
+                    # to have shape: [1, None, None, 3] for TF model
                     image_np_expanded = np.expand_dims(
                         image_color_np[:, :, :3], axis=0)
                     # Actual detection
@@ -278,8 +275,7 @@ class ObjectDetector(object):
                                   msg=f'Average loop for the past {logging_loops} iteration is {loop_time:.3f}s')
                         loop_time = 0
                     time.sleep(loopDelay)
-                    # if not self.show_video:
-                    #     cv2.destroyAllWindows()
+                    # Show on screen if required
                     if self.show_video:
                         # Visualization of the results of a detection.
                         vis_util.visualize_boxes_and_labels_on_image_array(
