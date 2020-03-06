@@ -244,59 +244,61 @@ class ObjectDetector(object):
         """
         self.load_model()
 
-        with self.detection_graph.as_default():
-            with tf.Session(graph=self.detection_graph) as sess:
-                log.warning(LOGGER_OBJECT_DETECTOR_RUN_DETECTION,
-                            msg='In context for detector.')
-                logging_loops = 50
-                loop_time = 0
-                n_loops = 0
-                # Launch the loop
-                # if k4a.device_start_cameras(self.k4a_device, self.k4a_device_config):
-                while True:
-                    image_tensor, boxes, scores, classes, num_detections = self._get_tensors()
-                    # Read frame from camera
-                    image_color_np, image_depth_np = self.k4a_device.get_capture(color_only=False)
-                    # Expand dimensions since the model expects images
-                    # to have shape: [1, None, None, 3] for TF model
-                    image_np_expanded = np.expand_dims(
-                        image_color_np[:, :, :3], axis=0)
-                    # Actual detection
-                    start_time = time.time()
-                    (boxes, scores, classes, num_detections) = sess.run(
-                        [boxes, scores, classes, num_detections],
-                        feed_dict={image_tensor: image_np_expanded})
-                    end_time = time.time()
-                    loop_time += (end_time - start_time)
-                    n_loops += 1
-                    if n_loops % logging_loops == 0:
-                        loop_time /= logging_loops
-                        log.debug(LOGGER_OBJECT_DETECTOR_RUN_DETECTION,
-                                  msg=f'Average loop for the past {logging_loops} iteration is {loop_time:.3f}s')
-                        loop_time = 0
-                    time.sleep(loopDelay)
-                    # Show on screen if required
-                    if self.show_video:
-                        # Visualization of the results of a detection.
-                        vis_util.visualize_boxes_and_labels_on_image_array(
-                            image_color_np,
-                            np.squeeze(boxes),
-                            np.squeeze(classes).astype(np.int32),
-                            np.squeeze(scores),
-                            self.category_index,
-                            use_normalized_coordinates=True,
-                            line_thickness=4)
-                        # Display output
-                        cv2.imshow('object detection',
-                                   cv2.resize(image_color_np, (1024, 576)))
-                        cv2.imshow('depth view',
-                                   cv2.resize(image_depth_np, (1024, 576)), cmap='gray')
-                        if cv2.waitKey(1) & 0xFF == ord('q'):
-                            # cv2.destroyAllWindows()
-                            cv2.destroyWindow('object detection')
-                            cv2.destroyWindow('depth view')
-                            self.show_video = False
-                            # break
+        try:
+            with self.detection_graph.as_default():
+                with tf.Session(graph=self.detection_graph) as sess:
+                    log.warning(LOGGER_OBJECT_DETECTOR_RUN_DETECTION,
+                                msg='In context for detector.')
+                    logging_loops = 50
+                    loop_time = 0
+                    n_loops = 0
+                    # Launch the loop
+                    # if k4a.device_start_cameras(self.k4a_device, self.k4a_device_config):
+                    while True:
+                        image_tensor, boxes, scores, classes, num_detections = self._get_tensors()
+                        # Read frame from camera
+                        bgra_image_color_np, image_depth_np = self.k4a_device.get_capture(color_only=False, transform_depth_to_color=True)
+                        # Expand dimensions since the model expects images
+                        # to have shape: [1, None, None, 3] for TF model
+                        rgb_image_color_np = bgra_image_color_np[:, :, :3][..., ::-1].copy()
+                        image_np_expanded = np.expand_dims(rgb_image_color_np, axis=0)
+                        # Actual detection
+                        start_time = time.time()
+                        (boxes, scores, classes, num_detections) = sess.run(
+                            [boxes, scores, classes, num_detections],
+                            feed_dict={image_tensor: image_np_expanded})
+                        end_time = time.time()
+                        loop_time += (end_time - start_time)
+                        n_loops += 1
+                        if n_loops % logging_loops == 0:
+                            loop_time /= logging_loops
+                            log.debug(LOGGER_OBJECT_DETECTOR_RUN_DETECTION,
+                                      msg=f'Average loop for the past {logging_loops} iteration is {loop_time:.3f}s')
+                            loop_time = 0
+                        time.sleep(loopDelay)
+                        # Show on screen if required
+                        if self.show_video:
+                            # Visualization of the results of a detection.
+                            bgra_image_color_np_boxes = vis_util.visualize_boxes_and_labels_on_image_array(
+                                bgra_image_color_np[:, :, :3],
+                                np.squeeze(boxes),
+                                np.squeeze(classes).astype(np.int32),
+                                np.squeeze(scores),
+                                self.category_index,
+                                use_normalized_coordinates=True,
+                                line_thickness=4)
+                            # Display output
+                            cv2.imshow('object detection', cv2.resize(bgra_image_color_np_boxes, (1024, 576)))
+                            cv2.imshow('depth view', cv2.resize(image_depth_np, (1024, 576)))
+                            if cv2.waitKey(1) & 0xFF == ord('q'):
+                                # cv2.destroyAllWindows()
+                                cv2.destroyWindow('object detection')
+                                cv2.destroyWindow('depth view')
+                                self.show_video = False
+                                # break
+        except Exception:
+            log.error(LOGGER_OBJECT_DETECTOR_RUN_DETECTION,
+                      f'Error : {traceback.print_exc()}')
 
     async def asyncProcessMQTTMessages(self, loopDelay=0.25):
         """

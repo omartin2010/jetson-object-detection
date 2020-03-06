@@ -134,12 +134,6 @@ RUN pip3 install paho-mqtt
 
 COPY usr/include/k4a /usr/include/k4a/
 COPY usr/lib/aarch64-linux-gnu/ /usr/lib/aarch64-linux-gnu/
-RUN pip3 install git+https://github.com/omartin2010/pyk4a.git
-# RUN pip3 install pybind11
-# RUN pip3 install k4a-python
-# RUN git clone https://github.com/brendandburns/py-k4a.git
-# WORKDIR /tmp/py-k4a
-# RUN python3 setup.py build
-# RUN python3 setup.py install 
-
+ARG bob=3
+RUN pip3 install git+https://github.com/omartin2010/pyk4a.git@0.4-dev
 WORKDIR /root
