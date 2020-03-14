@@ -3,7 +3,10 @@ import traceback
 import threading
 import paho.mqtt.client as mqtt
 import numpy as np
-import tensorflow as tf
+import requests
+import io
+from PIL import Image
+import base64
 import cv2
 import json
 from pyk4a import PyK4A, K4AException    # , K4ATimeoutException
@@ -13,8 +16,8 @@ import asyncio
 from constant import K4A_DEFINITIONS
 from utils import label_map_util
 from utils import visualization_utils as vis_util
-from constant import LOGGER_OBJECT_DETECTOR_MAIN, LOGGER_OBJECT_DETECTOR_LOAD_MODEL, \
-    OBJECT_DETECTOR_CONFIG_DICT, LOGGER_OBJECT_DETECTOR_MQTT_LOOP, LOGGER_OBJECT_DETECTOR_RUNNER, \
+from constant import LOGGER_OBJECT_DETECTOR_MAIN, OBJECT_DETECTOR_CONFIG_DICT, \
+    LOGGER_OBJECT_DETECTOR_MQTT_LOOP, LOGGER_OBJECT_DETECTOR_RUNNER, \
     LOGGER_OBJECT_DETECTOR_ASYNC_LOOP, LOGGER_OBJECT_DETECTOR_ASYNC_PROCESS_MQTT, \
     LOGGER_OBJECT_DETECTOR_KILL_SWITCH, LOGGER_OBJECT_DETECTOR_RUN_DETECTION
 from logger import RoboLogger
@@ -33,7 +36,6 @@ class ObjectDetector(object):
         # Adjust configuration (to make strings into constants)
         self.__adjustConfigDict(self.configuration)
         self._camera_index = configuration[OBJECT_DETECTOR_CONFIG_DICT]['camera_index']
-        self.frozen_graph_path = configuration[OBJECT_DETECTOR_CONFIG_DICT]['frozen_graph_path']
         self.num_classes = configuration[OBJECT_DETECTOR_CONFIG_DICT]['num_classes']
         self.label_map_path = configuration[OBJECT_DETECTOR_CONFIG_DICT]['label_map_path']
         self.mqttMessageQueue = queue.Queue()
@@ -43,10 +45,14 @@ class ObjectDetector(object):
             k4aConf(color_resolution=k4a_config_dict['color_resolution'],
                     depth_mode=k4a_config_dict['depth_mode'],
                     camera_fps=k4a_config_dict['camera_fps'],
-                    synchronized_images_only=k4a_config_dict['synchronized_images_only'],
-                    color_format=k4a_config_dict["color_format"]))
+                    synchronized_images_only=k4a_config_dict['synchronized_images_only']))
         self._readyForInferencing = False
         # defaults to false, put to true for debugging (need video display)
+        label_map = label_map_util.load_labelmap(self.label_map_path)
+        categories = label_map_util.convert_label_map_to_categories(label_map,
+                                                                    max_num_classes=self.num_classes,
+                                                                    use_display_name=True)
+        self.category_index = label_map_util.create_category_index(categories)
         self.show_video = False
 
     def run(self) -> None:
@@ -78,7 +84,7 @@ class ObjectDetector(object):
                         msg='Launching Detector Thread')
             self.detectorThread = threading.Thread(
                 target=self.runDetection(
-                    loopDelay=0.10), name='ObjectDetector')
+                    loopDelay=0.05), name='ObjectDetector')
             self.detectorThread.start()
 
             while True:
@@ -168,54 +174,6 @@ class ObjectDetector(object):
             # Bump up the problem...
             raise
 
-    def load_model(self) -> None:
-        # log.warning(LOGGER_OBJECT_DETECTOR_LOAD_MODEL,
-        # f'Connecting to camera {self._camera_index}')
-        # self.cap = cv2.VideoCapture(self._camera_index)
-        # self.cap = k4a.Capture()
-        self.detection_graph = tf.Graph()
-        with self.detection_graph.as_default():
-            od_graph_def = tf.GraphDef()
-            with tf.gfile.GFile(self.frozen_graph_path, 'rb') as fid:
-                serialized_graph = fid.read()
-                od_graph_def.ParseFromString(serialized_graph)
-                log.warning(LOGGER_OBJECT_DETECTOR_LOAD_MODEL,
-                            msg=f'Loading model in memory...')
-                tf.import_graph_def(od_graph_def, name='')
-        log.warning(LOGGER_OBJECT_DETECTOR_LOAD_MODEL,
-                    msg='Model loaded in memory.')
-        # Loading label map
-        # Label maps map indices to category names, so that when our convolution network predicts `5`,
-        # we know that this corresponds to `airplane`.  Here we use internal utility functions,
-        # but anything that returns a dictionary mapping integers to appropriate string labels would be fine
-        label_map = label_map_util.load_labelmap(self.label_map_path)
-        categories = label_map_util.convert_label_map_to_categories(label_map,
-                                                                    max_num_classes=self.num_classes,
-                                                                    use_display_name=True)
-        self.category_index = label_map_util.create_category_index(categories)
-        self._readyForInferencing = True
-
-    def _get_tensors(self):
-        """
-        Helper function to getting tensors for object detection API
-        """
-        # Extract image tensor
-        image_tensor = self.detection_graph.get_tensor_by_name(
-            'image_tensor:0')
-        # Extract detection boxes
-        boxes = self.detection_graph.get_tensor_by_name(
-            'detection_boxes:0')
-        # Extract detection scores
-        scores = self.detection_graph.get_tensor_by_name(
-            'detection_scores:0')
-        # Extract detection classes
-        classes = self.detection_graph.get_tensor_by_name(
-            'detection_classes:0')
-        # Extract number of detections
-        num_detections = self.detection_graph.get_tensor_by_name(
-            'num_detections:0')
-        return image_tensor, boxes, scores, classes, num_detections
-
     def threadImplEventLoop(self):
         """
         Main event asyncio eventloop launched in a separate thread
@@ -242,60 +200,73 @@ class ObjectDetector(object):
         delay:float:delay to pause between frames scoring
         returns:task
         """
-        self.load_model()
-
         try:
-            with self.detection_graph.as_default():
-                with tf.Session(graph=self.detection_graph) as sess:
-                    log.warning(LOGGER_OBJECT_DETECTOR_RUN_DETECTION,
-                                msg='In context for detector.')
-                    logging_loops = 50
-                    loop_time = 0
-                    n_loops = 0
-                    # Launch the loop
-                    # if k4a.device_start_cameras(self.k4a_device, self.k4a_device_config):
-                    while True:
-                        image_tensor, boxes, scores, classes, num_detections = self._get_tensors()
-                        # Read frame from camera
-                        bgra_image_color_np, image_depth_np = self.k4a_device.get_capture(color_only=False, transform_depth_to_color=True)
-                        # Expand dimensions since the model expects images
-                        # to have shape: [1, None, None, 3] for TF model
-                        rgb_image_color_np = bgra_image_color_np[:, :, :3][..., ::-1].copy()
-                        image_np_expanded = np.expand_dims(rgb_image_color_np, axis=0)
-                        # Actual detection
-                        start_time = time.time()
-                        (boxes, scores, classes, num_detections) = sess.run(
-                            [boxes, scores, classes, num_detections],
-                            feed_dict={image_tensor: image_np_expanded})
-                        end_time = time.time()
-                        loop_time += (end_time - start_time)
-                        n_loops += 1
-                        if n_loops % logging_loops == 0:
-                            loop_time /= logging_loops
-                            log.debug(LOGGER_OBJECT_DETECTOR_RUN_DETECTION,
-                                      msg=f'Average loop for the past {logging_loops} iteration is {loop_time:.3f}s')
-                            loop_time = 0
-                        time.sleep(loopDelay)
-                        # Show on screen if required
-                        if self.show_video:
-                            # Visualization of the results of a detection.
-                            bgra_image_color_np_boxes = vis_util.visualize_boxes_and_labels_on_image_array(
-                                bgra_image_color_np[:, :, :3],
-                                np.squeeze(boxes),
-                                np.squeeze(classes).astype(np.int32),
-                                np.squeeze(scores),
-                                self.category_index,
-                                use_normalized_coordinates=True,
-                                line_thickness=4)
-                            # Display output
-                            cv2.imshow('object detection', cv2.resize(bgra_image_color_np_boxes, (1024, 576)))
-                            cv2.imshow('depth view', cv2.resize(image_depth_np, (1024, 576)))
-                            if cv2.waitKey(1) & 0xFF == ord('q'):
-                                # cv2.destroyAllWindows()
-                                cv2.destroyWindow('object detection')
-                                cv2.destroyWindow('depth view')
-                                self.show_video = False
-                                # break
+            headers = {}
+            headers['Content-Type'] = 'application/json'
+            hostname = self.configuration['object_detector']['endpoint_hostname']
+            port = self.configuration['object_detector']['endpoint_port']
+            path = self.configuration['object_detector']['endpoint_path']
+            model_url = f'http://{hostname}:{port}/{path}'
+            logging_loops = 50
+            loop_time = 0
+            n_loops = 0
+            # Launch the loop
+            while True:
+                # Read frame from camera
+                bgra_image_color_np, image_depth_np = \
+                    self.k4a_device.get_capture(
+                        color_only=False,
+                        transform_depth_to_color=True)
+                rgb_image_color_np = bgra_image_color_np[:, :, :3][..., ::-1].copy()
+                # Actual detection
+                im = Image.fromarray(rgb_image_color_np).resize((300, 300))
+                buf = io.BytesIO()
+                im.save(buf, format='PNG')
+                base64_encoded_image = base64.b64encode(buf.getvalue())
+                data = {}
+                data['image'] = base64_encoded_image.decode('ascii')
+                start_time = time.time()
+                response = requests.post(model_url,
+                                         headers=headers,
+                                         data=json.dumps(data))
+                end_time = time.time()
+                if response.status_code == 200:
+                    boxes = response.json()['boxes']
+                    scores = response.json()['scores']
+                    classes = response.json()['classes']
+                    # num_detections = response.json()['num_detection']
+                    loop_time += (end_time - start_time)
+                    n_loops += 1
+                    if n_loops % logging_loops == 0:
+                        loop_time /= logging_loops
+                        log.debug(
+                            LOGGER_OBJECT_DETECTOR_RUN_DETECTION,
+                            msg=f'Average loop for the past {logging_loops}'
+                            f' fiteration is {loop_time:.3f}s')
+                        loop_time = 0
+                    time.sleep(loopDelay)
+                    # Show on screen if required
+                else:
+                    raise
+                if self.show_video:
+                    # Visualization of the results of a detection.
+                    bgra_image_color_np_boxes = vis_util.visualize_boxes_and_labels_on_image_array(
+                        bgra_image_color_np[:, :, :3],
+                        np.squeeze(boxes),
+                        np.squeeze(classes).astype(np.int32),
+                        np.squeeze(scores),
+                        self.category_index,
+                        use_normalized_coordinates=True,
+                        line_thickness=4)
+                    # Display output
+                    cv2.imshow('object detection', cv2.resize(bgra_image_color_np_boxes, (1024, 576)))
+                    cv2.imshow('depth view', cv2.resize(image_depth_np, (1024, 576)))
+                    if cv2.waitKey(1) & 0xFF == ord('q'):
+                        # cv2.destroyAllWindows()
+                        cv2.destroyWindow('object detection')
+                        cv2.destroyWindow('depth view')
+                        self.show_video = False
+                        # break
         except Exception:
             log.error(LOGGER_OBJECT_DETECTOR_RUN_DETECTION,
                       f'Error : {traceback.print_exc()}')
@@ -320,26 +291,6 @@ class ObjectDetector(object):
                         log.warning(
                             LOGGER_OBJECT_DETECTOR_ASYNC_PROCESS_MQTT, msg='Kill switch activated')
                         self.killSwitch()
-
-                    elif currentMQTTMoveMessage.topic == 'bot/jetson/detectSingleObject':
-                        log.info(LOGGER_OBJECT_DETECTOR_ASYNC_PROCESS_MQTT,
-                                 msg='Invoking object detection')
-                        thresh = msgdict['threshold']
-                        start_time = time.time()
-                        boxes, scores, classes, num_detections = self.run_detection(
-                            show_video=False, loop=False)
-                        stop_time = time.time()
-                        num_relevant_detections = (scores > thresh).sum()
-                        boxes = boxes[0][:num_relevant_detections]
-                        scores = scores[0][:num_relevant_detections]
-                        classes = classes[0][:num_relevant_detections]
-                        log.info(LOGGER_OBJECT_DETECTOR_ASYNC_PROCESS_MQTT,
-                                 msg=f'Detector found {num_relevant_detections} objects in {(stop_time - start_time):0.2f} second.')
-                        for i in range(num_relevant_detections):
-                            class_name = self.category_index[int(
-                                classes[i])]['name']
-                            log.debug(LOGGER_OBJECT_DETECTOR_ASYNC_PROCESS_MQTT,
-                                      msg=f'Object {i} : {class_name}, class_id={int(classes[i])}; Score: {scores[i]:0.4f} Box: {boxes[i]}')
 
                     elif currentMQTTMoveMessage.topic == 'bot/jetson/detectObjectDisplayVideo':
                         log.info(LOGGER_OBJECT_DETECTOR_ASYNC_PROCESS_MQTT,
