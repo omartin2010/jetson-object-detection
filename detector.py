@@ -53,6 +53,7 @@ class ObjectDetector(object):
                                                                     use_display_name=True)
         self.category_index = label_map_util.create_category_index(categories)
         self.show_video = False
+        self.show_depth_video = False
         if k4a_config_dict['camera_fps'] == FPS.FPS_5:
             self.frame_duration = 1. / 5
         elif k4a_config_dict['camera_fps'] == FPS.FPS_15:
@@ -68,7 +69,7 @@ class ObjectDetector(object):
         Launches the runner that runs most things (MQTT queue, etc.)
         """
         try:
-            # Initialize the Kinect Device
+            log.warning(LOGGER_OBJECT_DETECTOR_RUNNER, f'Initializing Kinect')
             self.k4a_device.connect()
             log.warning(LOGGER_OBJECT_DETECTOR_RUNNER,
                         msg=f'K4A device initialized...')
@@ -85,14 +86,6 @@ class ObjectDetector(object):
             self.eventLoopThread = threading.Thread(
                 target=self.thread_impl_event_loop, name='asyncioEventLoop')
             self.eventLoopThread.start()
-
-            # # Launch detector in a separate thread
-            # log.warning(LOGGER_OBJECT_DETECTOR_RUNNER,
-            #             msg='Launching Detector Thread')
-            # self.detectorThread = threading.Thread(
-            #     target=self.runCaptureLoop(
-            #         loopDelay=0.05), name='CaptureLoop')
-            # self.detectorThread.start()
 
             while True:
                 try:
@@ -194,7 +187,7 @@ class ObjectDetector(object):
             log.warning(LOGGER_OBJECT_DETECTOR_ASYNC_LOOP, msg=f'Launching async_run_capture_loop task')
             self.eventLoop.create_task(self.async_run_capture_loop())
             log.warning(LOGGER_OBJECT_DETECTOR_ASYNC_LOOP, msg=f'Launching asykc_run_detection task')
-            self.eventLoop.create_task(self.async_run_detection())
+            self.eventLoop.create_task(self.async_run_detection(loopDelay=0.5))
             self.eventLoop.run_forever()
             log.warning(LOGGER_OBJECT_DETECTOR_ASYNC_LOOP, msg=f'Asyncio event loop started')
 
@@ -205,11 +198,10 @@ class ObjectDetector(object):
             self.eventLoop.stop()
             self.eventLoop.close()
 
-    async def async_run_detection(self) -> None:
+    async def async_run_detection(self, loopDelay=0) -> None:
         """
         returns object detection
-        params :
-        delay:float:delay to pause between frames scoring
+        delay:loopDelay:delay to pause between frames scoring
         returns:task
         """
         try:
@@ -232,12 +224,13 @@ class ObjectDetector(object):
                 payload = {'image': base64_encoded_image.decode('ascii')}
                 start_time = time.time()
                 async with ClientSession() as session:
-                    async with session.post(url=model_url, data=payload, headers=headers) as response:
+                    async with session.post(url=model_url, data=json.dumps(payload), headers=headers) as response:
                         end_time = time.time()
                         if response.status == 200:
-                            self.detection_boxes = response.json()['boxes']
-                            self.detection_scores = response.json()['scores']
-                            self.detection_classes = response.json()['classes']
+                            body = await response.json()
+                            self.detection_boxes = body['boxes']
+                            self.detection_scores = body['scores']
+                            self.detection_classes = body['classes']
                             # num_detections = response.json()['num_detection']
                             loop_time += (end_time - start_time)
                             n_loops += 1
@@ -251,6 +244,8 @@ class ObjectDetector(object):
                             # Show on screen if required
                         else:
                             raise (f'HTTP response code is {response.status} for detection service...')
+                # Pause for x seconds
+                asyncio.sleep(loopDelay)
         except Exception:
             log.error(LOGGER_OBJECT_DETECTOR_RUN_DETECTION,
                       f'Error : {traceback.print_exc()}')
@@ -279,15 +274,14 @@ class ObjectDetector(object):
                         self.category_index,
                         use_normalized_coordinates=True,
                         line_thickness=4)
-                    # Display output
                     cv2.imshow('object detection', cv2.resize(bgra_image_color_np_boxes, (1024, 576)))
+                if self.show_depth_video:
                     cv2.imshow('depth view', cv2.resize(image_depth_np, (1024, 576)))
+                if self.show_depth_video or self.show_video:
                     if cv2.waitKey(1) & 0xFF == ord('q'):
-                        # cv2.destroyAllWindows()
-                        cv2.destroyWindow('object detection')
-                        cv2.destroyWindow('depth view')
+                        cv2.destroyAllWindows()
                         self.show_video = False
-                        # break
+                        self.show_depth_video = False
                 duration = time.time() - start_time
                 sleep_time = max(0, duration - self.frame_duration)
                 await asyncio.sleep(sleep_time)
@@ -324,6 +318,11 @@ class ObjectDetector(object):
                         else:
                             show_video = True
                         self.show_video = show_video
+                        if 'show_depth_video' in msgdict:
+                            show_depth_video = msgdict['show_depth_video']
+                        else:
+                            show_depth_video = False
+                        self.show_depth_video = show_depth_video
 
                     elif currentMQTTMoveMessage.topic == 'bot/logger':
                         # Changing the logging level on the fly...
