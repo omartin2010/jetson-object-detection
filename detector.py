@@ -3,7 +3,6 @@ import traceback
 import threading
 import paho.mqtt.client as mqtt
 import numpy as np
-# import requests
 import io
 from PIL import Image
 import base64
@@ -12,7 +11,6 @@ import json
 from aiohttp import ClientSession
 from pyk4a import PyK4A, K4AException, FPS
 from pyk4a import Config as k4aConf
-# from pyk4a.FPS import FPS_5, FPS_15, FPS_30
 import time
 import asyncio
 from constant import K4A_DEFINITIONS
@@ -231,7 +229,7 @@ class ObjectDetector(object):
                             self.detection_boxes = body['boxes']
                             self.detection_scores = body['scores']
                             self.detection_classes = body['classes']
-                            # num_detections = response.json()['num_detection']
+                            # self.num_detections = body['num_detection']
                             loop_time += (end_time - start_time)
                             n_loops += 1
                             if n_loops % logging_loops == 0:
