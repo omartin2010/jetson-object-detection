@@ -1,19 +1,19 @@
+import json
+import time
 import queue
 import traceback
 import threading
-import paho.mqtt.client as mqtt
 import numpy as np
+import paho.mqtt.client as mqtt
 import io
 from PIL import Image
 import base64
 import cv2
-import json
+import asyncio
 from aiohttp import ClientSession
 from pyk4a import PyK4A, K4AException, FPS
 from pyk4a import Config as k4aConf
-import time
-import asyncio
-from constant import K4A_DEFINITIONS
+from constant import K4A_DEFINITIONS, OPENCV_OBJECT_TRACKERS
 from utils import label_map_util
 from utils import visualization_utils as vis_util
 from constant import LOGGER_OBJECT_DETECTOR_MAIN, OBJECT_DETECTOR_CONFIG_DICT, \
@@ -21,6 +21,7 @@ from constant import LOGGER_OBJECT_DETECTOR_MAIN, OBJECT_DETECTOR_CONFIG_DICT, \
     LOGGER_OBJECT_DETECTOR_ASYNC_LOOP, LOGGER_OBJECT_DETECTOR_ASYNC_PROCESS_MQTT, \
     LOGGER_OBJECT_DETECTOR_KILL_SWITCH, LOGGER_OBJECT_DETECTOR_RUN_DETECTION
 from logger import RoboLogger
+from tracked_object import BoundingBox, TrackedObject
 log = RoboLogger.getLogger()
 log.warning(LOGGER_OBJECT_DETECTOR_MAIN, msg="Libraries loaded.")
 
@@ -38,7 +39,7 @@ class ObjectDetector(object):
         self.label_map_path = configuration[OBJECT_DETECTOR_CONFIG_DICT]['label_map_path']
         self.mqtt_message_queue = queue.Queue()
         self.exception_queue = queue.Queue()
-        k4a_config_dict = self.configuration['object_detector']['k4a_device']
+        k4a_config_dict = self.configuration[OBJECT_DETECTOR_CONFIG_DICT]['k4a_device']
         self.k4a_device = PyK4A(
             k4aConf(color_resolution=k4a_config_dict['color_resolution'],
                     depth_mode=k4a_config_dict['depth_mode'],
@@ -46,9 +47,11 @@ class ObjectDetector(object):
                     synchronized_images_only=k4a_config_dict['synchronized_images_only']))
         # defaults to false, put to true for debugging (need video display)
         label_map = label_map_util.load_labelmap(self.label_map_path)
-        categories = label_map_util.convert_label_map_to_categories(label_map,
-                                                                    max_num_classes=self.num_classes,
-                                                                    use_display_name=True)
+        categories = label_map_util.\
+            convert_label_map_to_categories(
+                label_map,
+                max_num_classes=self.num_classes,
+                use_display_name=True)
         self.category_index = label_map_util.create_category_index(categories)
         self.show_video = False
         self.show_depth_video = False
@@ -60,6 +63,13 @@ class ObjectDetector(object):
             self.frame_duration = 1. / 30
         else:
             raise('Unsupported frame rate {}'.format(k4a_config_dict['camera_fps']))
+        self.detection_boxes = None
+        self.detection_scores = None
+        self.detection_classes = None
+        self.trackers = cv2.MultiTracker_create()
+        self.tracked_objects = []
+        self.detection_threshold = 0.005         # 0.5
+        self.default_tracker = self.configuration[OBJECT_DETECTOR_CONFIG_DICT]['open_cv_default_tracker']
 
     def run(self) -> None:
         """
@@ -183,7 +193,7 @@ class ObjectDetector(object):
             log.warning(LOGGER_OBJECT_DETECTOR_ASYNC_LOOP, msg=f'Launching process MQTT message task')
             self.eventLoop.create_task(self.async_process_mqtt_messages(loopDelay=0.25))
             log.warning(LOGGER_OBJECT_DETECTOR_ASYNC_LOOP, msg=f'Launching async_run_capture_loop task')
-            self.eventLoop.create_task(self.async_run_capture_loop())
+            self.eventLoop.create_task(self.async_run_capture_loop(tracker='kcf'))
             log.warning(LOGGER_OBJECT_DETECTOR_ASYNC_LOOP, msg=f'Launching asykc_run_detection task')
             self.eventLoop.create_task(self.async_run_detection(loopDelay=0.5))
             self.eventLoop.run_forever()
@@ -192,6 +202,7 @@ class ObjectDetector(object):
         except Exception:
             log.error(LOGGER_OBJECT_DETECTOR_ASYNC_LOOP,
                       f'Error : {traceback.print_exc()}')
+            raise
         finally:
             self.eventLoop.stop()
             self.eventLoop.close()
@@ -213,9 +224,9 @@ class ObjectDetector(object):
             n_loops = 0
             # Launch the loop
             while True:
-                rgb_image_color_np = self.bgra_image_color_np[:, :, :3][..., ::-1].copy()
-                # Actual detection
-                im = Image.fromarray(rgb_image_color_np).resize((300, 300))
+                height, width = self.rgb_image_color_np.shape[:2]
+                # Send image to bytes buffer
+                im = Image.fromarray(self.rgb_image_color_np).resize((300, 300))
                 buf = io.BytesIO()
                 im.save(buf, format='PNG')
                 base64_encoded_image = base64.b64encode(buf.getvalue())
@@ -230,6 +241,41 @@ class ObjectDetector(object):
                             self.detection_scores = body['scores']
                             self.detection_classes = body['classes']
                             # self.num_detections = body['num_detection']
+                            # Find #boxes with score > thresh
+                            nb_bb = np.sum(np.array(
+                                self.detection_scores[0]) > self.detection_threshold)
+                            bb_list = [BoundingBox(x_min=box[1],
+                                                   y_min=box[0],
+                                                   x_max=box[3],
+                                                   y_max=box[2],
+                                                   image_height=height,
+                                                   image_width=width)
+                                       for box in self.detection_boxes[0][:nb_bb]]
+                            # Create mappings of boxes to trackers
+                            bb_dict = {bb: None for bb in bb_list}
+                            # For each object currently tracked
+                            for obj in self.tracked_objects:
+                                # UPDATE TRACKED OBJECT POSITION
+                                # Find the one with greatest overlap to
+                                # bounding boxes found by inference
+                                bb = obj.get_max_overlap(bb_list)
+                                bb_dict[bb] = obj
+                                #   update tracked object with new tracker based on bounding box and detected time last seen time
+                            # List all unused bounding boxes and create tracker
+                            for idx, bb in [(idx, k) for idx, (k, v) in enumerate(bb_dict.items()) if v is None]:
+                                log.warning(LOGGER_OBJECT_DETECTOR_RUN_DETECTION, msg=f'Creating new tracker')
+                                bbox = (bb.x_min, bb.y_min, bb.x_max - bb.x_min, bb.y_max - bb.y_min)
+                                self.tracked_objects.append(
+                                    TrackedObject(
+                                        tracker_bbox=bbox,
+                                        object_class=self.detection_classes[0][idx],
+                                        score=self.detection_scores[0][idx]))
+                                # bbox = (x, y, w, h)
+                                self.trackers.add(
+                                    OPENCV_OBJECT_TRACKERS[self.default_tracker](),
+                                    self.rgb_image_color_np,
+                                    bbox)
+                            # how to ensure that new trackers werent the previously lost trackers
                             loop_time += (end_time - start_time)
                             n_loops += 1
                             if n_loops % logging_loops == 0:
@@ -248,29 +294,37 @@ class ObjectDetector(object):
             log.error(LOGGER_OBJECT_DETECTOR_RUN_DETECTION,
                       f'Error : {traceback.print_exc()}')
 
-    async def async_run_capture_loop(self) -> None:
+    async def async_run_capture_loop(self, tracker) -> None:
         """
         Video capture loop (can optionally display video) for debugging purposes
+        tracker: str:name of the tracker to use (see OPENCV_OBJECT_TRACKERS in constant)
         """
         try:
+            # Create the multiple object tracker
+            # trackers = cv2.MuliTracker_create()
             # Launch the loop
             while True:
                 start_time = time.time()
                 # Read frame from camera
-                self.bgra_image_color_np, image_depth_np = \
+                bgra_image_color_np, image_depth_np = \
                     self.k4a_device.get_capture(
                         color_only=False,
                         transform_depth_to_color=True)
+                self.rgb_image_color_np = bgra_image_color_np[:, :, :3][..., ::-1].copy()
+                # Update trackers at every loop
+                self.trackers.update(self.rgb_image_color_np)
+                # UPDATE self.tracked_object BOUNDING BOX POSITIONSWQ!!!
                 # Show video in debugging mode
                 if self.show_video:
                     # Visualization of the results of a detection.
                     bgra_image_color_np_boxes = vis_util.visualize_boxes_and_labels_on_image_array(
-                        self.bgra_image_color_np[:, :, :3],
+                        bgra_image_color_np[:, :, :3],
                         np.squeeze(self.detection_boxes),
                         np.squeeze(self.detection_classes).astype(np.int32),
                         np.squeeze(self.detection_scores),
                         self.category_index,
                         use_normalized_coordinates=True,
+                        min_score_thresh=self.detection_threshold,
                         line_thickness=4)
                     cv2.imshow('object detection', cv2.resize(bgra_image_color_np_boxes, (1024, 576)))
                 if self.show_depth_video:

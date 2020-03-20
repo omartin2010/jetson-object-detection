@@ -19,6 +19,7 @@
         "frozen_graph_path" : "model/frozen_inference_graph.pb",
         "label_map_path" : "model/label_map.pbtxt",
         "num_classes" : 2,
+        "open_cv_default_tracker" : "kcf",
         "k4a_device" :{
             "color_resolution" : "K4A_COLOR_RESOLUTION_720P",
             "depth_mode": "K4A_DEPTH_MODE_WFOV_UNBINNED",

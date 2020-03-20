@@ -1,4 +1,5 @@
 import pyk4a
+import cv2
 # region LOGGERS
 LOGGER_OBJECT_DETECTOR_STARTUP = 'obj_detector_startup'
 LOGGER_OBJECT_DETECTOR_MAIN = 'obj_detector_object_py'
@@ -30,6 +31,16 @@ K4A_DEFINITIONS = {
     "K4A_FRAMES_PER_SECOND_30": pyk4a.FPS.FPS_30,
     "True": True,
     "False": False,
+}
+
+OPENCV_OBJECT_TRACKERS = {
+    "csrt": cv2.TrackerCSRT_create,
+    "kcf": cv2.TrackerKCF_create,
+    "boosting": cv2.TrackerBoosting_create,
+    "mil": cv2.TrackerMIL_create,
+    "tld": cv2.TrackerTLD_create,
+    "medianflow": cv2.TrackerMedianFlow_create,
+    "mosse": cv2.TrackerMOSSE_create
 }
 
 # region various constants
