@@ -1,7 +1,6 @@
 import json
 import time
 import queue
-from copy import deepcopy
 import traceback
 import threading
 import numpy as np
@@ -22,7 +21,8 @@ from constant import LOGGER_OBJECT_DETECTOR_MAIN, OBJECT_DETECTOR_CONFIG_DICT, \
     LOGGER_OBJECT_DETECTOR_ASYNC_LOOP, LOGGER_OBJECT_DETECTOR_ASYNC_PROCESS_MQTT, \
     LOGGER_OBJECT_DETECTOR_KILL_SWITCH, LOGGER_OBJECT_DETECTOR_RUN_DETECTION
 from logger import RoboLogger
-from tracked_object import BoundingBox, TrackedObject
+from tracked_object import BoundingBox, TrackedObject, FMT_STANDARD, \
+    FMT_TF_BBOX, FMT_TRACKER
 log = RoboLogger.getLogger()
 log.warning(LOGGER_OBJECT_DETECTOR_MAIN, msg="Libraries loaded.")
 
@@ -255,33 +255,36 @@ class ObjectDetector(object):
                             # Create dictionnary mappings of boxes : trackers
                             bb_dict = {bb: None for bb in bb_list}
                             # Find best fitting BB for each tracked object
-                            temp_tracked_objects = deepcopy(self.tracked_objects)
+                            temp_tracked_objects = []
                             for tracked_object in self.tracked_objects:
-                                # UPDATE TRACKED OBJECT POSITION
                                 # Find best overlapping bounding box
-                                target_bb = tracked_object.get_max_overlap_bb(bb_list)
+                                target_bb_idx = tracked_object.get_max_overlap_bb(bb_list)
                                 # Update dictionnary with outcome unless target_bb == None
-                                if target_bb:
+                                if target_bb_idx is not None:
                                     for idx, (bounding_box, tracker) in enumerate(bb_dict.items()):
-                                        if target_bb == idx:
+                                        if target_bb_idx == idx:
                                             bb_dict[bounding_box] = tracked_object
-                                            tracked_object.last_seen = time.time()
+                                            tracked_object.update(box=bounding_box.get_bbox())
+                                    temp_tracked_objects.append(tracked_object)
                                 else:
-                                    # Removal after 5 seconds being unseen
-                                    if tracked_object.last_seen - time.time() < 5:
-                                        temp_tracked_objects.remove(tracked_object)
+                                    # Add object to temp list if seen in last 5 seconds
+                                    if time.time() - tracked_object.last_seen < 5:
+                                        temp_tracked_objects.append(tracked_object)
+                                    else:
+                                        log.warning(LOGGER_OBJECT_DETECTOR_RUN_DETECTION,
+                                                    msg=f'Deleting tracker (id={tracked_object.id}')
                             self.tracked_objects = temp_tracked_objects
                             # List all unused bounding boxes and create tracker
                             for idx, bb in [(idx, k) for idx, (k, v) in enumerate(bb_dict.items()) if v is None]:
-                                log.warning(LOGGER_OBJECT_DETECTOR_RUN_DETECTION, msg=f'Creating new tracker')
-                                self.tracked_objects.append(TrackedObject(
+                                new_obj = TrackedObject(
                                     object_class=self.detection_classes[0][idx],
                                     score=self.detection_scores[0][idx],
-                                    image=np.asarray(im),       # operate on resized image
-                                    tracker_bbox=(
-                                        bb.x_min, bb.y_min,
-                                        bb.x_max, bb.y_max),
-                                    tracker_alg=self.default_tracker))
+                                    image=np.asarray(im),       # operate on resized image for speed
+                                    tracker_bbox=bb.get_bbox(fmt=FMT_STANDARD),
+                                    tracker_alg=self.default_tracker)
+                                self.tracked_objects.append(new_obj)
+                                log.warning(LOGGER_OBJECT_DETECTOR_RUN_DETECTION,
+                                            msg=f'Created tracker (id={new_obj.id})')
                             # how to ensure that new trackers werent the previously lost trackers
                             loop_time += (end_time - start_time)
                             n_loops += 1
@@ -317,8 +320,9 @@ class ObjectDetector(object):
                 self.rgb_image_color_np = bgra_image_color_np[:, :, :3][..., ::-1].copy()
                 # Update trackers at every loop
                 for tracked_object in self.tracked_objects:
-                    tracked_object.tracker.update(self.rgb_image_color_np)
-                # UPDATE self.tracked_object BOUNDING BOX POSITIONSWQ!!!
+                    im = Image.fromarray(self.rgb_image_color_np).resize((300, 300))
+                    tracked_object.tracker.update(np.asarray(im))
+                # UPDATE self.tracked_object BOUNDING BOX POSITIONSWQ!!! - DON'T FORGET TRACKERS ARE RESCALED!
                 # Show video in debugging mode
                 if self.show_video:
                     # Visualization of the results of a detection.
@@ -345,6 +349,7 @@ class ObjectDetector(object):
         except Exception:
             log.error(LOGGER_OBJECT_DETECTOR_RUN_DETECTION,
                       f'Error : {traceback.print_exc()}')
+            raise (f'Error : {traceback.print_exc()}')
 
     async def async_process_mqtt_messages(self, loopDelay=0.25):
         """
