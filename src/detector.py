@@ -13,7 +13,7 @@ import asyncio
 from aiohttp import ClientSession
 from pyk4a import PyK4A, K4AException, FPS
 from pyk4a import Config as k4aConf
-from constant import K4A_DEFINITIONS, OPENCV_OBJECT_TRACKERS
+from constant import K4A_DEFINITIONS
 from utils import label_map_util
 from utils import visualization_utils as vis_util
 from constant import LOGGER_OBJECT_DETECTOR_MAIN, OBJECT_DETECTOR_CONFIG_DICT, \
@@ -66,9 +66,8 @@ class ObjectDetector(object):
         self.detection_boxes = None
         self.detection_scores = None
         self.detection_classes = None
-        self.trackers = cv2.MultiTracker_create()
+        self.detection_threshold = 0.5
         self.tracked_objects = []
-        self.detection_threshold = 0.005         # 0.5
         self.default_tracker = self.configuration[OBJECT_DETECTOR_CONFIG_DICT]['open_cv_default_tracker']
 
     def run(self) -> None:
@@ -244,6 +243,7 @@ class ObjectDetector(object):
                             # Find #boxes with score > thresh
                             nb_bb = np.sum(np.array(
                                 self.detection_scores[0]) > self.detection_threshold)
+                            # Create a list of BoundingBoxes > thresh
                             bb_list = [BoundingBox(x_min=box[1],
                                                    y_min=box[0],
                                                    x_max=box[3],
@@ -264,17 +264,14 @@ class ObjectDetector(object):
                             # List all unused bounding boxes and create tracker
                             for idx, bb in [(idx, k) for idx, (k, v) in enumerate(bb_dict.items()) if v is None]:
                                 log.warning(LOGGER_OBJECT_DETECTOR_RUN_DETECTION, msg=f'Creating new tracker')
-                                bbox = (bb.x_min, bb.y_min, bb.x_max - bb.x_min, bb.y_max - bb.y_min)
-                                self.tracked_objects.append(
-                                    TrackedObject(
-                                        tracker_bbox=bbox,
-                                        object_class=self.detection_classes[0][idx],
-                                        score=self.detection_scores[0][idx]))
-                                # bbox = (x, y, w, h)
-                                self.trackers.add(
-                                    OPENCV_OBJECT_TRACKERS[self.default_tracker](),
-                                    self.rgb_image_color_np,
-                                    bbox)
+                                self.tracked_objects.append(TrackedObject(
+                                    object_class=self.detection_classes[0][idx],
+                                    score=self.detection_scores[0][idx],
+                                    image=np.asarray(im),       # operate on resized image
+                                    tracker_bbox=(
+                                        bb.x_min, bb.y_min,
+                                        bb.x_max, bb.y_max),
+                                    tracker_alg=self.default_tracker))
                             # how to ensure that new trackers werent the previously lost trackers
                             loop_time += (end_time - start_time)
                             n_loops += 1
@@ -312,7 +309,8 @@ class ObjectDetector(object):
                         transform_depth_to_color=True)
                 self.rgb_image_color_np = bgra_image_color_np[:, :, :3][..., ::-1].copy()
                 # Update trackers at every loop
-                self.trackers.update(self.rgb_image_color_np)
+                for tracker in self.tracked_objects:
+                    tracker.update(self.rgb_image_color_np)
                 # UPDATE self.tracked_object BOUNDING BOX POSITIONSWQ!!!
                 # Show video in debugging mode
                 if self.show_video:
