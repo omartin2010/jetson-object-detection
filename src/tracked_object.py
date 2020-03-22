@@ -1,7 +1,7 @@
 import uuid
 import time
 import numpy as np
-from constant import OPENCV_OBJECT_TRACKERS, classproperty
+from constant import OPENCV_OBJECT_TRACKERS
 
 
 class BoundingBox(object):
@@ -63,9 +63,6 @@ class TrackedObject(object):
     """
     Used to track objects that are seen by the camera
     """
-    # Class Variable Init
-    _cv2_trackers = {}
-
     def __init__(self,
                  object_class: str,
                  score: float,
@@ -95,13 +92,6 @@ class TrackedObject(object):
             use_normalized_coordinates=use_normalized_coordinates)
         self.tracker.init(
             image, self.tracker_bounding_box.get_cv2_tracker_fmt())
-        # Keep track of all trackers in the class for the update fonction
-        type(self)._cv2_trackers[self._object_id:self._tracker]
-        # add box position and filter between bb and tracker position
-
-    @classproperty
-    def cv2_trackers(cls):
-        return cls._cv2_trackers
 
     def get_max_overlap_bb(self, list_bb: [BoundingBox]):
         """
@@ -132,11 +122,11 @@ class TrackedObject(object):
             Area that overlaps (in pixels^2)
         """
         overlap_x = max(
-            0, min(self._tracker_bounding_box.x_max, bb.x_max) - max(
-                self._tracker_bounding_box.x_min, bb.x_min))
+            0, min(self.tracker_bounding_box.x_max, bb.x_max) - max(
+                self.tracker_bounding_box.x_min, bb.x_min))
         overlap_y = max(
-            0, min(self._tracker_bounding_box.y_max, bb.y_max) - max(
-                self._tracker_bounding_box.y_min, bb.y_min))
+            0, min(self.tracker_bounding_box.y_max, bb.y_max) - max(
+                self.tracker_bounding_box.y_min, bb.y_min))
         overlap_area = max(0, float(overlap_x) * float(overlap_y))
         return overlap_area
 

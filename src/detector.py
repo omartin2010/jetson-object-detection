@@ -1,6 +1,7 @@
 import json
 import time
 import queue
+from copy import deepcopy
 import traceback
 import threading
 import numpy as np
@@ -192,7 +193,7 @@ class ObjectDetector(object):
             log.warning(LOGGER_OBJECT_DETECTOR_ASYNC_LOOP, msg=f'Launching process MQTT message task')
             self.eventLoop.create_task(self.async_process_mqtt_messages(loopDelay=0.25))
             log.warning(LOGGER_OBJECT_DETECTOR_ASYNC_LOOP, msg=f'Launching async_run_capture_loop task')
-            self.eventLoop.create_task(self.async_run_capture_loop(tracker='kcf'))
+            self.eventLoop.create_task(self.async_run_capture_loop())
             log.warning(LOGGER_OBJECT_DETECTOR_ASYNC_LOOP, msg=f'Launching asykc_run_detection task')
             self.eventLoop.create_task(self.async_run_detection(loopDelay=0.5))
             self.eventLoop.run_forever()
@@ -251,16 +252,25 @@ class ObjectDetector(object):
                                                    image_height=height,
                                                    image_width=width)
                                        for box in self.detection_boxes[0][:nb_bb]]
-                            # Create mappings of boxes to trackers
+                            # Create dictionnary mappings of boxes : trackers
                             bb_dict = {bb: None for bb in bb_list}
-                            # For each object currently tracked
-                            for obj in self.tracked_objects:
+                            # Find best fitting BB for each tracked object
+                            temp_tracked_objects = deepcopy(self.tracked_objects)
+                            for tracked_object in self.tracked_objects:
                                 # UPDATE TRACKED OBJECT POSITION
-                                # Find the one with greatest overlap to
-                                # bounding boxes found by inference
-                                bb = obj.get_max_overlap(bb_list)
-                                bb_dict[bb] = obj
-                                #   update tracked object with new tracker based on bounding box and detected time last seen time
+                                # Find best overlapping bounding box
+                                target_bb = tracked_object.get_max_overlap_bb(bb_list)
+                                # Update dictionnary with outcome unless target_bb == None
+                                if target_bb:
+                                    for idx, (bounding_box, tracker) in enumerate(bb_dict.items()):
+                                        if target_bb == idx:
+                                            bb_dict[bounding_box] = tracked_object
+                                            tracked_object.last_seen = time.time()
+                                else:
+                                    # Removal after 5 seconds being unseen
+                                    if tracked_object.last_seen - time.time() < 5:
+                                        temp_tracked_objects.remove(tracked_object)
+                            self.tracked_objects = temp_tracked_objects
                             # List all unused bounding boxes and create tracker
                             for idx, bb in [(idx, k) for idx, (k, v) in enumerate(bb_dict.items()) if v is None]:
                                 log.warning(LOGGER_OBJECT_DETECTOR_RUN_DETECTION, msg=f'Creating new tracker')
@@ -291,14 +301,11 @@ class ObjectDetector(object):
             log.error(LOGGER_OBJECT_DETECTOR_RUN_DETECTION,
                       f'Error : {traceback.print_exc()}')
 
-    async def async_run_capture_loop(self, tracker) -> None:
+    async def async_run_capture_loop(self) -> None:
         """
         Video capture loop (can optionally display video) for debugging purposes
-        tracker: str:name of the tracker to use (see OPENCV_OBJECT_TRACKERS in constant)
         """
         try:
-            # Create the multiple object tracker
-            # trackers = cv2.MuliTracker_create()
             # Launch the loop
             while True:
                 start_time = time.time()
@@ -309,8 +316,8 @@ class ObjectDetector(object):
                         transform_depth_to_color=True)
                 self.rgb_image_color_np = bgra_image_color_np[:, :, :3][..., ::-1].copy()
                 # Update trackers at every loop
-                for tracker in self.tracked_objects:
-                    tracker.update(self.rgb_image_color_np)
+                for tracked_object in self.tracked_objects:
+                    tracked_object.tracker.update(self.rgb_image_color_np)
                 # UPDATE self.tracked_object BOUNDING BOX POSITIONSWQ!!!
                 # Show video in debugging mode
                 if self.show_video:
