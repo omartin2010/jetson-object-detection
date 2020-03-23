@@ -63,7 +63,8 @@ class ObjectDetector(object):
         elif k4a_config_dict['camera_fps'] == FPS.FPS_30:
             self.frame_duration = 1. / 30
         else:
-            raise('Unsupported frame rate {}'.format(k4a_config_dict['camera_fps']))
+            raise('Unsupported frame rate {}'.format(
+                k4a_config_dict['camera_fps']))
         self.detection_boxes = None
         self.detection_scores = None
         self.detection_classes = None
@@ -187,17 +188,23 @@ class ObjectDetector(object):
         Main event asyncio eventloop launched in a separate thread
         """
         try:
-            log.warning(LOGGER_OBJECT_DETECTOR_ASYNC_LOOP, msg=f'Launching asyncio event loop')
+            log.warning(LOGGER_OBJECT_DETECTOR_ASYNC_LOOP,
+                        msg=f'Launching asyncio event loop')
             self.eventLoop = asyncio.new_event_loop()
             asyncio.set_event_loop(self.eventLoop)
-            log.warning(LOGGER_OBJECT_DETECTOR_ASYNC_LOOP, msg=f'Launching process MQTT message task')
-            self.eventLoop.create_task(self.async_process_mqtt_messages(loopDelay=0.25))
-            log.warning(LOGGER_OBJECT_DETECTOR_ASYNC_LOOP, msg=f'Launching async_run_capture_loop task')
+            log.warning(LOGGER_OBJECT_DETECTOR_ASYNC_LOOP,
+                        msg=f'Launching process MQTT message task')
+            self.eventLoop.create_task(
+                self.async_process_mqtt_messages(loopDelay=0.25))
+            log.warning(LOGGER_OBJECT_DETECTOR_ASYNC_LOOP,
+                        msg=f'Launching async_run_capture_loop task')
             self.eventLoop.create_task(self.async_run_capture_loop())
-            log.warning(LOGGER_OBJECT_DETECTOR_ASYNC_LOOP, msg=f'Launching asykc_run_detection task')
+            log.warning(LOGGER_OBJECT_DETECTOR_ASYNC_LOOP,
+                        msg=f'Launching asykc_run_detection task')
             self.eventLoop.create_task(self.async_run_detection(loopDelay=0.5))
             self.eventLoop.run_forever()
-            log.warning(LOGGER_OBJECT_DETECTOR_ASYNC_LOOP, msg=f'Asyncio event loop started')
+            log.warning(LOGGER_OBJECT_DETECTOR_ASYNC_LOOP,
+                        msg=f'Asyncio event loop started')
 
         except Exception:
             log.error(LOGGER_OBJECT_DETECTOR_ASYNC_LOOP,
@@ -226,7 +233,8 @@ class ObjectDetector(object):
             while True:
                 height, width = self.rgb_image_color_np.shape[:2]
                 # Send image to bytes buffer
-                im = Image.fromarray(self.rgb_image_color_np).resize((300, 300))
+                im = Image.fromarray(
+                    self.rgb_image_color_np).resize((300, 300))
                 buf = io.BytesIO()
                 im.save(buf, format='PNG')
                 base64_encoded_image = base64.b64encode(buf.getvalue())
@@ -245,12 +253,10 @@ class ObjectDetector(object):
                             nb_bb = np.sum(np.array(
                                 self.detection_scores[0]) > self.detection_threshold)
                             # Create a list of BoundingBoxes > thresh
-                            bb_list = [BoundingBox(x_min=box[1],
-                                                   y_min=box[0],
-                                                   x_max=box[3],
-                                                   y_max=box[2],
+                            bb_list = [BoundingBox(box=box,
                                                    image_height=height,
-                                                   image_width=width)
+                                                   image_width=width,
+                                                   fmt=FMT_TF_BBOX)
                                        for box in self.detection_boxes[0][:nb_bb]]
                             # Create dictionnary mappings of boxes : trackers
                             bb_dict = {bb: None for bb in bb_list}
@@ -258,29 +264,33 @@ class ObjectDetector(object):
                             temp_tracked_objects = []
                             for tracked_object in self.tracked_objects:
                                 # Find best overlapping bounding box
-                                target_bb_idx = tracked_object.get_max_overlap_bb(bb_list)
+                                target_bb_idx = tracked_object.get_max_overlap_bb(
+                                    bb_list)
                                 # Update dictionnary with outcome unless target_bb == None
                                 if target_bb_idx is not None:
                                     for idx, (bounding_box, tracker) in enumerate(bb_dict.items()):
                                         if target_bb_idx == idx:
                                             bb_dict[bounding_box] = tracked_object
-                                            tracked_object.update(box=bounding_box.get_bbox())
+                                            tracked_object.update(
+                                                box=bounding_box.get_bbox())
                                     temp_tracked_objects.append(tracked_object)
                                 else:
                                     # Add object to temp list if seen in last 5 seconds
                                     if time.time() - tracked_object.last_seen < 5:
-                                        temp_tracked_objects.append(tracked_object)
+                                        temp_tracked_objects.append(
+                                            tracked_object)
                                     else:
                                         log.warning(LOGGER_OBJECT_DETECTOR_RUN_DETECTION,
-                                                    msg=f'Deleting tracker (id={tracked_object.id}')
+                                                    msg=f'Deleted tracker (id={tracked_object.id})')
                             self.tracked_objects = temp_tracked_objects
                             # List all unused bounding boxes and create tracker
                             for idx, bb in [(idx, k) for idx, (k, v) in enumerate(bb_dict.items()) if v is None]:
                                 new_obj = TrackedObject(
                                     object_class=self.detection_classes[0][idx],
                                     score=self.detection_scores[0][idx],
-                                    image=np.asarray(im),       # operate on resized image for speed
+                                    image=self.rgb_image_color_np,
                                     tracker_bbox=bb.get_bbox(fmt=FMT_STANDARD),
+                                    fmt=FMT_STANDARD,
                                     tracker_alg=self.default_tracker)
                                 self.tracked_objects.append(new_obj)
                                 log.warning(LOGGER_OBJECT_DETECTOR_RUN_DETECTION,
@@ -297,12 +307,14 @@ class ObjectDetector(object):
                                 loop_time = 0
                             # Show on screen if required
                         else:
-                            raise (f'HTTP response code is {response.status} for detection service...')
-                # Pause for x seconds
+                            raise (
+                                f'HTTP response code is {response.status} for detection service...')
+                # Pause for loopDelay seconds
                 asyncio.sleep(loopDelay)
         except Exception:
             log.error(LOGGER_OBJECT_DETECTOR_RUN_DETECTION,
                       f'Error : {traceback.print_exc()}')
+            raise (f'Error : {traceback.print_exc()}')
 
     async def async_run_capture_loop(self) -> None:
         """
@@ -320,24 +332,33 @@ class ObjectDetector(object):
                 self.rgb_image_color_np = bgra_image_color_np[:, :, :3][..., ::-1].copy()
                 # Update trackers at every loop
                 for tracked_object in self.tracked_objects:
-                    im = Image.fromarray(self.rgb_image_color_np).resize((300, 300))
-                    tracked_object.tracker.update(np.asarray(im))
-                # UPDATE self.tracked_object BOUNDING BOX POSITIONSWQ!!! - DON'T FORGET TRACKERS ARE RESCALED!
+                    tracked_object.update(image=self.rgb_image_color_np)
                 # Show video in debugging mode
                 if self.show_video:
                     # Visualization of the results of a detection.
+                    detection_boxes = [[list(obj.bounding_box.get_bbox(
+                        fmt=FMT_TF_BBOX,
+                        use_normalized_coordinates=True))
+                        for obj in self.tracked_objects]]
+                    detection_classes = [[obj.object_class for obj in self.tracked_objects]]
+                    detection_scores = [[obj.score for obj in self.tracked_objects]]
                     bgra_image_color_np_boxes = vis_util.visualize_boxes_and_labels_on_image_array(
                         bgra_image_color_np[:, :, :3],
-                        np.squeeze(self.detection_boxes),
-                        np.squeeze(self.detection_classes).astype(np.int32),
-                        np.squeeze(self.detection_scores),
+                        np.squeeze(detection_boxes),
+                        np.squeeze(detection_classes).astype(np.int32),
+                        np.squeeze(detection_scores),
+                        # np.squeeze(self.detection_boxes),
+                        # np.squeeze(self.detection_classes).astype(np.int32),
+                        # np.squeeze(self.detection_scores),
                         self.category_index,
                         use_normalized_coordinates=True,
                         min_score_thresh=self.detection_threshold,
                         line_thickness=4)
-                    cv2.imshow('object detection', cv2.resize(bgra_image_color_np_boxes, (1024, 576)))
+                    cv2.imshow('object detection', cv2.resize(
+                        bgra_image_color_np_boxes, (1024, 576)))
                 if self.show_depth_video:
-                    cv2.imshow('depth view', cv2.resize(image_depth_np, (1024, 576)))
+                    cv2.imshow('depth view', cv2.resize(
+                        image_depth_np, (1024, 576)))
                 if self.show_depth_video or self.show_video:
                     if cv2.waitKey(1) & 0xFF == ord('q'):
                         cv2.destroyAllWindows()
