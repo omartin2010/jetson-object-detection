@@ -5,8 +5,22 @@ from PIL import Image
 from constant import OPENCV_OBJECT_TRACKERS
 
 FMT_TRACKER = 'tracker'
+"""
+Origin top left.
+Coordinates for box is (x, y, w, h) where x = x_min, x_max = x + h ;
+    y_max = image-height - y ; y_min - y_max = image height
+    see (see https://docs.opencv.org/3.4/d2/d44/classcv_1_1Rect__.html)
+"""
 FMT_TF_BBOX = 'tensorflow_boundingbox'
+"""
+Origin is bottom left... or is it ??
+Coordinates for box is (y_min, x_min, y_max, x_max)
+"""
 FMT_STANDARD = 'std'
+"""
+Origin is bottom left
+Coordinates for box is (x_min, y_min, x_max, y_max)
+"""
 
 
 class BoundingBox(object):
@@ -26,13 +40,11 @@ class BoundingBox(object):
             Constructor for bounding box with origin bottom left.
         Args:
             box : tuple of proper format depending on fmt below
-            fmt: string, one of FMT_TRACKER, FMT_TF_BBOX, FMT_STANDARD ;
-                FMT_TRACKER has origin top left
-                FMT_TF_BBOX and FMT_STANDARD has origin bottom left
             image_height : required
             image_width : required
+            fmt: string, one of FMT_TRACKER, FMT_TF_BBOX, FMT_STANDARD ;
             use_normalized_coordinates : True means coordinates are 0<x<1
-                False is absolute pixels
+                False is absolute pixels. True when scoring from TF model
         """
         self.image_height = image_height
         self.image_width = image_width
@@ -43,9 +55,9 @@ class BoundingBox(object):
             self.y_max = self.height - y
             self.y_min = self.y_max - self.height
         elif fmt == FMT_TF_BBOX:
-            self.y_min, self.x_min, self.y_max, self.x_max = box
+            (self.y_min, self.x_min, self.y_max, self.x_max) = box
         elif fmt == FMT_STANDARD:
-            self.x_min, self.x_max, self.y_min, self.y_max = box
+            (self.x_min, self.y_min, self.x_max, self.y_max) = box
         if use_normalized_coordinates:
             if image_height is None or image_width is None:
                 raise('Need to specify image width and height in constuctor')
@@ -55,17 +67,14 @@ class BoundingBox(object):
                 self.y_min = int(self.y_min * image_height)
                 self.y_max = int(self.y_max * image_height)
 
-    def get_bbox(self, fmt='tracker', use_normalized_coordinates=False):
+    def get_bbox(self,
+                 fmt='tracker',
+                 use_normalized_coordinates=False):
         """
         Description:
             Returns a tuple of the values in the cv2.trackers format
         Args:
-            fmt: string, one of FMT_TRACKER, FMT_TF_BBOX, FMT_STANDARD ;
-                FMT_TRACKER is x_min, image_height - y_max, width, height
-                (in our coordinate syetem). FMT_TRACKER has origin top left.
-                (see https://docs.opencv.org/3.4/d2/d44/classcv_1_1Rect__.html)
-                FMT_STD has origin bottom left.
-                FMT_TF_BBOX has origin bottom left - but order is ymin, xmin, ymax, ymin
+            fmt: string, one of FMT_TRACKER, FMT_TF_BBOX, FMT_STANDARD
             use_normalized_coordinates : bool, for tf_box and standard format only
         Returns
             format = tuple (a,b,c,d) with coordinates in the proper format
@@ -85,13 +94,15 @@ class BoundingBox(object):
         elif fmt == FMT_STANDARD:
             if use_normalized_coordinates:
                 return (self.x_min / self.image_width,
-                        self.x_max / self.image_width,
                         self.y_min / self.image_height,
+                        self.x_max / self.image_width,
                         self.y_max / self.image_height)
             else:
-                return (self.x_min, self.x_max, self.y_min, self.y_max)
+                return (self.x_min, self.y_min, self.x_max, self.y_max)
 
-    def update(self, box: [int], fmt='tracker'):
+    def update(self,
+               box: [int],
+               fmt='tracker'):
         """
         Description:
             Update position with various formatting (see input param fmt)
@@ -123,7 +134,8 @@ class TrackedObject(object):
                  object_class: int,
                  score: float,
                  image,
-                 tracker_bbox: tuple,
+                 original_image_resolution: tuple,
+                 box: tuple,
                  fmt='std',
                  resized_image_resolution=(300, 300),
                  tracker_alg='kcf',
@@ -133,33 +145,38 @@ class TrackedObject(object):
             object_class = int representing the object class being tracked
             score = float for prediction score for the object (0=<x<=1)
             image = numpy array containing image ti initialize the tracker
-            tracker_bbox = (x_min, y_min, x_max, y_max) value for current
-                bounding box for this object (FMT_STANDARD)
-            resized_image_resolution = (x, y) resolution (300x300) by default
-                to accelerate running the tracker
+            original_image_resolution: tuple (height, width) of unscaled image
+                because image input may be already resized
+            box = (a,b,c,d) depending on fmt for new object
+            fmt: string, one of FMT_TRACKER, FMT_BBOX, FMT_STANDARD
+            resized_image_resolution = (height, width) resolution
+                (300x300) by default to accelerate running the tracker
             tracker_alg : string, one of the values in OPENCV_OBJECT_TRACKERS
             use_normalized_coordinates: bool, normalized coordinates are
                 relative to image, that would be in the tracker bounding box
         """
         self.id = uuid.uuid4()
         self.object_class = object_class
-        self.last_seen = time.time()
+        # self.last_seen = time.time()
         self.score = score
         self._resized_image_resolution = resized_image_resolution
+        self._original_image_resolution = original_image_resolution
         self.tracker = OPENCV_OBJECT_TRACKERS[tracker_alg]()
-        height, width = image.shape[:2]
+        height, width = self._original_image_resolution
         self.bounding_box = BoundingBox(
-            box=tracker_bbox,
+            box=box,
             image_height=height,
             image_width=width,
             fmt=fmt,
             use_normalized_coordinates=use_normalized_coordinates)
-        if image.shape[:2] is not self._resized_image_resolution:
-            image = np.asarray(Image.fromarray(image).resize(self._resized_image_resolution))
-        self.tracker.init(
-            image, self.bounding_box.get_bbox())
+        self.update(image, box, fmt=fmt)
+        # if image.shape[:2] is not self._resized_image_resolution:
+        #     image = np.asarray(Image.fromarray(image).resize(self._resized_image_resolution))
+        # self.tracker.init(
+        #     image, self.bounding_box.get_bbox())
 
-    def get_max_overlap_bb(self, list_bb: [BoundingBox]):
+    def get_max_overlap_bb(self,
+                           list_bb: [BoundingBox]):
         """
         Description:
             Gets the bounding box that has the largets overlap
@@ -178,7 +195,8 @@ class TrackedObject(object):
             result = None
         return result
 
-    def get_overlap_bb(self, bb: BoundingBox) -> float:
+    def get_overlap_bb(self,
+                       bb: BoundingBox) -> float:
         """
         Description:
             Gets the overlap between two bounding boxes (self and bb)
@@ -196,29 +214,33 @@ class TrackedObject(object):
         overlap_area = max(0, float(overlap_x) * float(overlap_y))
         return overlap_area
 
-    def update(self, image=None, box=None, fmt=None):
+    def update(self,
+               image,
+               box=None,
+               fmt=None):
         """
         Description:
-            Updates all trackers that are being followed
+            Updates tracker with new bounding box or image
         Args:
             image: numpy array of image to update trackers with
             box: (a,b,c,d) tuple coordinates of a bounding box with fmt
-            fmt: string, one of FMT_TRACKER, FMT_BBOX, FMT_STANDARD
+            fmt: string, one of FMT_TRACKER, FMT_BBOX, FMT_STANDARD,
+                required if box is defined
         """
         self.last_seen = time.time()
-        if image is not None:
-            """
-            update with cv2 tracker functions
-            """
-            if image.shape[:2] is not self._resized_image_resolution:
-                image = np.asarray(Image.fromarray(image).resize(self._resized_image_resolution))
+        if image.shape[:2] != self._resized_image_resolution:
+            image = np.asarray(Image.fromarray(image).resize(self._resized_image_resolution))
+        if box is not None and image is not None:
+            if fmt is None:
+                raise('"fmt" param is required if box is defined.')
+            # updated box as per new detection -> create new tracker
+            self.bounding_box.update(box, fmt=fmt)
+            self.tracker.init(image, self.bounding_box.get_bbox(fmt=FMT_TRACKER))
+
+        elif image is not None:
+            # update with cv2 tracker functions
             (success, box) = self.tracker.update(image)
             if success:
                 self.bounding_box.update(box)
-        elif box is not None:
-            """
-            updated box as per new detection
-            """
-            self.bounding_box.update(box, fmt=fmt)
         else:
             raise('Image is not defined and bbox is not defined.')
