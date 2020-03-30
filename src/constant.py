@@ -12,6 +12,7 @@ LOGGER_OBJECT_DETECTOR_RUNNER = 'obj_detector_runner'
 LOGGER_OBJECT_DETECTOR_ASYNC_LOOP = 'obj_detector_async_loop'
 LOGGER_OBJECT_DETECTOR_ASYNC_PROCESS_MQTT = 'obj_detector_proc_mqtt'
 LOGGER_OBJECT_DETECTOR_KILL_SWITCH = 'obj_detector_kill_sw'
+LOGGER_OBJECT_DETECTOR_SORT_TRACKED_OBJECTS = 'obj_detector_sort_tracked_objects'
 # endregion
 
 K4A_DEFINITIONS = {

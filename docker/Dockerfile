@@ -125,8 +125,14 @@ RUN cd models/research && \
     python3 setup.py build && \
     python3 setup.py install
 RUN rm /tmp/* -rf
-COPY usr/include/k4a /usr/include/k4a/
-COPY usr/lib/aarch64-linux-gnu/ /usr/lib/aarch64-linux-gnu/
+COPY docker/usr/include/k4a /usr/include/k4a/
+COPY docker/usr/lib/aarch64-linux-gnu/ /usr/lib/aarch64-linux-gnu/
 RUN pip3 uninstall -y enum34 
-RUN pip3 install jupyterlab ptvsd paho-mqtt flask aiohttp git+https://github.com/etiennedub/pyk4a.git@0.3
-WORKDIR /root
+RUN pip3 install jupyterlab ptvsd debugpy paho-mqtt aiohttp git+https://github.com/etiennedub/pyk4a.git@0.3
+
+WORKDIR /app
+COPY src/utils /app/utils/
+COPY config.json /app
+COPY model/label_map.pbtxt /app/model/label_map.pbtxt
+COPY src/*.py /app/
+CMD [ "/bin/sh", "-c", "python3 startup.py --config_file config.json"]

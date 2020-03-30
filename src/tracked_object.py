@@ -126,7 +126,7 @@ class BoundingBox(object):
             (self.x_min, self.y_min, self.x_max, self.y_max) = box
 
 
-class TrackedObject(object):
+class TrackedObjectMP(object):
     """
     Used to track objects that are seen by the camera
     """
@@ -161,7 +161,7 @@ class TrackedObject(object):
         self.score = score
         self._resized_image_resolution = resized_image_resolution
         self._original_image_resolution = original_image_resolution
-        self.tracker = OPENCV_OBJECT_TRACKERS[tracker_alg]()
+        self.tracker_alg = tracker_alg
         height, width = self._original_image_resolution
         self.bounding_box = BoundingBox(
             box=box,
@@ -170,10 +170,6 @@ class TrackedObject(object):
             fmt=fmt,
             use_normalized_coordinates=use_normalized_coordinates)
         self.update(image, box, fmt=fmt)
-        # if image.shape[:2] is not self._resized_image_resolution:
-        #     image = np.asarray(Image.fromarray(image).resize(self._resized_image_resolution))
-        # self.tracker.init(
-        #     image, self.bounding_box.get_bbox())
 
     def get_max_overlap_bb(self,
                            list_bb: [BoundingBox]):
@@ -244,3 +240,8 @@ class TrackedObject(object):
                 self.bounding_box.update(box)
         else:
             raise('Image is not defined and bbox is not defined.')
+
+
+class TrackedObject(TrackedObjectMP):
+    def __init__(self, **kwargs):
+        super(TrackedObject).__init__(**kwargs)

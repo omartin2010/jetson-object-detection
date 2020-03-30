@@ -3,6 +3,7 @@ import time
 import queue
 import traceback
 import threading
+from multiprocessing import Pool
 import numpy as np
 import paho.mqtt.client as mqtt
 import io
@@ -20,7 +21,7 @@ from constant import LOGGER_OBJECT_DETECTOR_MAIN, OBJECT_DETECTOR_CONFIG_DICT, \
     LOGGER_OBJECT_DETECTOR_MQTT_LOOP, LOGGER_OBJECT_DETECTOR_RUNNER, \
     LOGGER_OBJECT_DETECTOR_ASYNC_LOOP, LOGGER_OBJECT_DETECTOR_ASYNC_PROCESS_MQTT, \
     LOGGER_OBJECT_DETECTOR_KILL_SWITCH, LOGGER_ASYNC_RUN_DETECTION, \
-    LOGGER_ASYNC_RUN_CAPTURE_LOOP
+    LOGGER_ASYNC_RUN_CAPTURE_LOOP, LOGGER_OBJECT_DETECTOR_SORT_TRACKED_OBJECTS
 from logger import RoboLogger
 from tracked_object import BoundingBox, TrackedObject, FMT_STANDARD, \
     FMT_TF_BBOX, FMT_TRACKER
@@ -41,6 +42,7 @@ class ObjectDetector(object):
         self.label_map_path = configuration[OBJECT_DETECTOR_CONFIG_DICT]['label_map_path']
         self.mqtt_message_queue = queue.Queue()
         self.exception_queue = queue.Queue()
+        self.ready_queue = queue.Queue()   # used to signal that there's an image ready for processing
         k4a_config_dict = self.configuration[OBJECT_DETECTOR_CONFIG_DICT]['k4a_device']
         self.k4a_device = PyK4A(
             k4aConf(color_resolution=k4a_config_dict['color_resolution'],
@@ -76,23 +78,36 @@ class ObjectDetector(object):
         Launches the runner that runs most things (MQTT queue, etc.)
         """
         try:
-            log.warning(LOGGER_OBJECT_DETECTOR_RUNNER, f'Initializing Kinect')
+            log.warning(LOGGER_OBJECT_DETECTOR_RUNNER,
+                        msg=f'Initializing Kinect')
             self.k4a_device.connect()
             log.warning(LOGGER_OBJECT_DETECTOR_RUNNER,
                         msg=f'K4A device initialized...')
+            # Create Process pool
+            log.warning(LOGGER_OBJECT_DETECTOR_RUNNER,
+                        msg=f'Creating Process Pool')
+            self.process_pool = Pool(processes=1)
+
             # Launch the MQTT thread listener
             log.warning(LOGGER_OBJECT_DETECTOR_RUNNER,
                         msg='Launching MQTT thread.')
             self.threadMQTT = threading.Thread(
-                target=self.thread_impl_mqtt, name='MQTTListener')
+                target=self.thread_mqtt_listener, name='MQTTListener')
             self.threadMQTT.start()
 
             # Launch main event loop in a separate thread
             log.warning(LOGGER_OBJECT_DETECTOR_RUNNER,
-                        msg='Launching event loop')
+                        msg='Launching asyncio event loop Thread')
             self.eventLoopThread = threading.Thread(
-                target=self.thread_impl_event_loop, name='asyncioEventLoop')
+                target=self.thread_event_loop, name='asyncioEventLoop')
             self.eventLoopThread.start()
+
+            # Launching capture loop thread
+            log.warning(LOGGER_OBJECT_DETECTOR_RUNNER,
+                        msg=f'Launching Capture Loop Thread')
+            self.captureLoopThread = threading.Thread(
+                target=self.thread_capture_loop, name='captureLoop')
+            self.captureLoopThread.start()
 
             while True:
                 try:
@@ -121,7 +136,7 @@ class ObjectDetector(object):
             log.error(LOGGER_OBJECT_DETECTOR_RUNNER,
                       f'Error : {traceback.print_exc()}')
 
-    def thread_impl_mqtt(self):
+    def thread_mqtt_listener(self):
         """
         MQTT Thread launching the loop and subscripbing to the right topics
         """
@@ -181,7 +196,7 @@ class ObjectDetector(object):
             # Bump up the problem...
             raise
 
-    def thread_impl_event_loop(self):
+    def thread_event_loop(self):
         """
         Main event asyncio eventloop launched in a separate thread
         """
@@ -194,9 +209,9 @@ class ObjectDetector(object):
                         msg=f'Launching process MQTT message task')
             self.eventLoop.create_task(
                 self.async_process_mqtt_messages(loopDelay=0.25))
-            log.warning(LOGGER_OBJECT_DETECTOR_ASYNC_LOOP,
-                        msg=f'Launching async_run_capture_loop task')
-            self.eventLoop.create_task(self.async_run_capture_loop())
+            # log.warning(LOGGER_OBJECT_DETECTOR_ASYNC_LOOP,
+            #             msg=f'Launching async_run_capture_loop task')
+            # self.eventLoop.create_task(self.async_run_capture_loop())
             log.warning(LOGGER_OBJECT_DETECTOR_ASYNC_LOOP,
                         msg=f'Launching asykc_run_detection task')
             self.eventLoop.create_task(self.async_run_detection(loopDelay=0.5))
@@ -227,6 +242,11 @@ class ObjectDetector(object):
             logging_loops = 50
             loop_time = 0
             n_loops = 0
+            task_duration = 0
+            # Only launch loop when ready (image on the self.rgb...)
+            itm = self.ready_queue.get(block=True)
+            if itm is None:
+                raise('Empty Queue...')
             # Launch the loop
             while True:
                 height, width = self.rgb_image_color_np.shape[:2]
@@ -244,66 +264,32 @@ class ObjectDetector(object):
                             body = await response.json()
                             log.debug(LOGGER_ASYNC_RUN_DETECTION,
                                       msg=f'Got model response... iteration {n_loops}')
-                            detection_boxes = body['boxes']
-                            detection_scores = body['scores']
-                            detection_classes = body['classes']
-                            # Find #boxes with score > thresh
-                            nb_bb = np.sum(np.array(detection_scores[0]) > self.detection_threshold)
-                            # Create a list of BoundingBoxes > thresh
-                            bb_list = [BoundingBox(box=box,
-                                                   image_height=height,
-                                                   image_width=width,
-                                                   fmt=FMT_TF_BBOX)
-                                       for box in detection_boxes[0][:nb_bb]]
-                            ds_list = [score for score in detection_scores[0][:nb_bb]]
-                            dc_list = [cla for cla in detection_classes[0][:nb_bb]]
-                            # Find best fitting BB for each tracked object
-                            temp_tracked_objects = []
-                            for tracked_object in self.tracked_objects:
-                                # Find best overlapping bounding box
-                                target_bb_idx = tracked_object.get_max_overlap_bb(bb_list)
-                                # Update dictionnary with outcome unless target_bb == None
-                                if target_bb_idx is not None:
-                                    tracked_object.update(
-                                        image=np.asarray(im),
-                                        box=bb_list[target_bb_idx].get_bbox(),
-                                        fmt=FMT_TRACKER)
-                                    temp_tracked_objects.append(tracked_object)
-                                    bb_list.remove(bb_list[target_bb_idx])
-                                    ds_list.remove(ds_list[target_bb_idx])
-                                    dc_list.remove(dc_list[target_bb_idx])
-                                else:
-                                    # Add object to temp list if seen in last 5 seconds
-                                    if time.time() - tracked_object.last_seen < 5:
-                                        temp_tracked_objects.append(
-                                            tracked_object)
-                                    else:
-                                        log.warning(LOGGER_ASYNC_RUN_DETECTION,
-                                                    msg=f'Deleted tracker (id={tracked_object.id})')
-                            log.debug(LOGGER_ASYNC_RUN_DETECTION,
-                                      msg=f'Done loop {n_loops} for {len(self.tracked_objects)} tracked objects')
-                            # List all unused bounding boxes and create tracker
-                            for idx, bb in enumerate(bb_list):
-                                new_obj = TrackedObject(
-                                    object_class=dc_list[idx],
-                                    score=ds_list[idx],
-                                    image=np.asarray(im),
-                                    original_image_resolution=(height, width),
-                                    box=bb.get_bbox(fmt=FMT_STANDARD),
-                                    fmt=FMT_STANDARD,
-                                    tracker_alg=self.default_tracker)
-                                temp_tracked_objects.append(new_obj)
-                                log.warning(LOGGER_ASYNC_RUN_DETECTION,
-                                            msg=f'Created tracker (id={new_obj.id})')
-                            # Copy temp list back to object
-                            self.tracked_objects = temp_tracked_objects
+                            # SEND BODY, SELF.DETECTION_THRESHOLD,  TO FUNCTION
+                            task_start_time = time.time()
+                            new_tracked_objects = self.process_pool.starmap(
+                                sort_tracked_objects, [(body,
+                                                       (height, width),
+                                                       im,
+                                                       self.detection_threshold,
+                                                       self.default_tracker,
+                                                       self.tracked_objects)])
+                            self.tracked_objects.append(new_tracked_objects)
+                            # task = pool.submit(sort_tracked_objects, height, width)
+                            # task = pool.submit(sort_tracked_objects, body, height, width, im)
+                            # self.tracked_objects = task.result()  # temp_tracked_objects
+                            task_duration += time.time() - task_start_time
                             loop_time += (end_time - start_time)
                             if n_loops % logging_loops == 0:
+                                task_duration /= logging_loops
                                 loop_time /= logging_loops
                                 log.debug(LOGGER_ASYNC_RUN_DETECTION,
                                           msg=f'Average loop for the past {logging_loops} '
                                               f'iteration is {loop_time:.3f}s')
+                                log.debug(LOGGER_ASYNC_RUN_DETECTION,
+                                          msg=f'Average task time for past {logging_loops} '
+                                              f'iterations is {task_duration:.3f}s')
                                 loop_time = 0
+                                task_duration = 0
                             n_loops += 1
                         else:
                             raise (
@@ -315,13 +301,14 @@ class ObjectDetector(object):
                       f'Error : {traceback.print_exc()}')
             raise (f'Error : {traceback.print_exc()}')
 
-    async def async_run_capture_loop(self) -> None:
+    def thread_capture_loop(self) -> None:
         """
         Video capture loop (can optionally display video) for debugging purposes
         """
         try:
             # Launch the loop
             n_loops = 0
+            average_duration = 0
             while True:
                 start_time = time.time()
                 # Read frame from camera
@@ -331,7 +318,7 @@ class ObjectDetector(object):
                         transform_depth_to_color=True)
                 log.debug(LOGGER_ASYNC_RUN_CAPTURE_LOOP,
                           msg=f'Ran capture (loop {n_loops})')
-                self.rgb_image_color_np = bgra_image_color_np[:, :, :3][..., ::-1].copy()
+                self.rgb_image_color_np = bgra_image_color_np[:, :, :3][..., ::-1].copy()   # maybe remove copy? ONLY COPY IN THE TF LOOP to LOWER CPU USAGE
                 # Update trackers at every loop
                 for tracked_object in self.tracked_objects:
                     tracked_object.update(image=self.rgb_image_color_np)
@@ -349,9 +336,6 @@ class ObjectDetector(object):
                         np.squeeze(detection_boxes),
                         np.squeeze(detection_classes).astype(np.int32),
                         np.squeeze(detection_scores),
-                        # np.squeeze(self.detection_boxes),
-                        # np.squeeze(self.detection_classes).astype(np.int32),
-                        # np.squeeze(self.detection_scores),
                         self.category_index,
                         use_normalized_coordinates=True,
                         min_score_thresh=self.detection_threshold,
@@ -368,8 +352,18 @@ class ObjectDetector(object):
                         self.show_depth_video = False
                 duration = time.time() - start_time
                 sleep_time = max(0, duration - self.frame_duration)
-                await asyncio.sleep(sleep_time)
+                average_duration += duration
+                # await asyncio.sleep(sleep_time)
+                time.sleep(sleep_time)
                 n_loops += 1
+                if n_loops % 50 == 0:
+                    duration_50 = average_duration
+                    average_duration /= 50
+                    log.warning(LOGGER_ASYNC_RUN_CAPTURE_LOOP,
+                                msg=f'Ran 50 in {duration_50:.2f}s - {average_duration:.2f}s/loop or {1/average_duration:.2f} loop/sec')
+                # only do this after the first loop is done
+                if n_loops == 1:
+                    self.ready_queue.put_nowait('image_ready')
         except Exception:
             log.error(LOGGER_ASYNC_RUN_CAPTURE_LOOP,
                       f'Error : {traceback.print_exc()}')
@@ -450,3 +444,77 @@ class ObjectDetector(object):
             else:
                 confDict[key] = self.__adjustConfigDict(confDict[key])
         return confDict
+
+
+def sort_tracked_objects(detection_response: str,
+                         image_shape: tuple,
+                         resized_im,
+                         detection_threshold: float,
+                         default_tracker: str,
+                         tracked_objects):
+    """
+    Description:
+        Function run on a separate process to sort tracked objects
+    Args:
+        detection_Response : string containing the json response of the scored model.
+            Includes bounding boxes, scores and classes of scored items.
+        image_shape : tuple (height, width) in pixels
+        resized_im: numpy array of resized image
+        detection_threshold : float, value 0<x<1 to accept detection as an object
+        default_tracker: string, representing the constant.py file for opencv
+        tracked_objects: list of objects currently being tracked by the system
+    Returns:
+        temp_tracked_object : object's list of tracked objects.
+    """
+    height, width = image_shape
+    detection_boxes = detection_response['boxes']
+    detection_scores = detection_response['scores']
+    detection_classes = detection_response['classes']
+    # Find #boxes with score > thresh
+    nb_bb = np.sum(np.array(detection_scores[0]) > detection_threshold)
+    # Create a list of BoundingBoxes > thresh
+    bb_list = [BoundingBox(box=box,
+                           image_height=height,
+                           image_width=width,
+                           fmt=FMT_TF_BBOX)
+               for box in detection_boxes[0][:nb_bb]]
+    ds_list = [score for score in detection_scores[0][:nb_bb]]
+    dc_list = [cla for cla in detection_classes[0][:nb_bb]]
+    # Find best fitting BB for each tracked object
+    temp_tracked_objects = []
+    for tracked_object in tracked_objects:
+        # Find best overlapping bounding box
+        target_bb_idx = tracked_object.get_max_overlap_bb(bb_list)
+        # Update dictionnary with outcome unless target_bb == None
+        if target_bb_idx is not None:
+            tracked_object.update(
+                image=np.asarray(resized_im),
+                box=bb_list[target_bb_idx].get_bbox(),
+                fmt=FMT_TRACKER)
+            temp_tracked_objects.append(tracked_object)
+            bb_list.remove(bb_list[target_bb_idx])
+            ds_list.remove(ds_list[target_bb_idx])
+            dc_list.remove(dc_list[target_bb_idx])
+        else:
+            # Add object to temp list if seen in last 5 seconds
+            if time.time() - tracked_object.last_seen < 5:
+                temp_tracked_objects.append(
+                    tracked_object)
+            else:
+                log.warning(LOGGER_OBJECT_DETECTOR_SORT_TRACKED_OBJECTS,
+                            msg=f'Deleted tracker (id={tracked_object.id})')
+    # List all unused bounding boxes and create tracker
+    for idx, bb in enumerate(bb_list):
+        new_obj = TrackedObject(
+            object_class=dc_list[idx],
+            score=ds_list[idx],
+            image=np.asarray(resized_im),
+            original_image_resolution=(height, width),
+            box=bb.get_bbox(fmt=FMT_STANDARD),
+            fmt=FMT_STANDARD,
+            tracker_alg=default_tracker)
+        temp_tracked_objects.append(new_obj)
+        log.warning(LOGGER_OBJECT_DETECTOR_SORT_TRACKED_OBJECTS,
+                    msg=f'Created tracker (id={new_obj.id})')
+    # Copy temp list back to object
+    return temp_tracked_objects
