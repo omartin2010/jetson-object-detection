@@ -3,7 +3,8 @@ import time
 import queue
 import traceback
 import threading
-from multiprocessing import Pool
+import multiprocessing as mp
+from multiprocessing import Process
 import numpy as np
 import paho.mqtt.client as mqtt
 import io
@@ -17,14 +18,15 @@ from pyk4a import Config as k4aConf
 from constant import K4A_DEFINITIONS
 from utils import label_map_util
 from utils import visualization_utils as vis_util
-from constant import LOGGER_OBJECT_DETECTOR_MAIN, OBJECT_DETECTOR_CONFIG_DICT, \
-    LOGGER_OBJECT_DETECTOR_MQTT_LOOP, LOGGER_OBJECT_DETECTOR_RUNNER, \
-    LOGGER_OBJECT_DETECTOR_ASYNC_LOOP, LOGGER_OBJECT_DETECTOR_ASYNC_PROCESS_MQTT, \
+from constant import LOGGER_OBJECT_DETECTOR_MAIN, \
+    OBJECT_DETECTOR_CONFIG_DICT, LOGGER_OBJECT_DETECTOR_MQTT_LOOP, \
+    LOGGER_OBJECT_DETECTOR_RUNNER, LOGGER_OBJECT_DETECTOR_ASYNC_LOOP, \
+    LOGGER_OBJECT_DETECTOR_ASYNC_PROCESS_MQTT, \
     LOGGER_OBJECT_DETECTOR_KILL_SWITCH, LOGGER_ASYNC_RUN_DETECTION, \
     LOGGER_ASYNC_RUN_CAPTURE_LOOP, LOGGER_OBJECT_DETECTOR_SORT_TRACKED_OBJECTS
 from logger import RoboLogger
-from tracked_object import BoundingBox, TrackedObject, FMT_STANDARD, \
-    FMT_TF_BBOX, FMT_TRACKER
+from tracked_object import BoundingBox, TrackedObject, TrackedObjectMP, \
+    FMT_STANDARD, FMT_TF_BBOX, FMT_TRACKER
 log = RoboLogger.getLogger()
 log.warning(LOGGER_OBJECT_DETECTOR_MAIN, msg="Libraries loaded.")
 
@@ -70,6 +72,9 @@ class ObjectDetector(object):
                 k4a_config_dict['camera_fps']))
         self.detection_threshold = 0.5
         self.tracked_objects = []
+        self.tracked_objects_mp = []
+        self.tracked_objects_queue = mp.Queue(maxsize=1)
+        self.tracked_objects_queue_output = mp.Queue(maxsize=1)
         self.default_tracker = self.configuration[OBJECT_DETECTOR_CONFIG_DICT]['open_cv_default_tracker']
 
     def run(self) -> None:
@@ -84,9 +89,18 @@ class ObjectDetector(object):
             log.warning(LOGGER_OBJECT_DETECTOR_RUNNER,
                         msg=f'K4A device initialized...')
             # Create Process pool
+            # self.process_pool = Pool(processes=1)
+
             log.warning(LOGGER_OBJECT_DETECTOR_RUNNER,
-                        msg=f'Creating Process Pool')
-            self.process_pool = Pool(processes=1)
+                        msg=f'Creating Process to sort tracked objects')
+            # Create process to process image and tracked objects
+            self.procTrackedObject = Process(
+                target=process_sort_tracked_objects,
+                name='ObjectTrackingSorter',
+                args=(
+                    self.tracked_objects_queue,
+                    self.tracked_objects_queue_output,))
+            self.procTrackedObject.start()
 
             # Launch the MQTT thread listener
             log.warning(LOGGER_OBJECT_DETECTOR_RUNNER,
@@ -264,19 +278,28 @@ class ObjectDetector(object):
                             body = await response.json()
                             log.debug(LOGGER_ASYNC_RUN_DETECTION,
                                       msg=f'Got model response... iteration {n_loops}')
-                            # SEND BODY, SELF.DETECTION_THRESHOLD,  TO FUNCTION
                             task_start_time = time.time()
-                            new_tracked_objects = self.process_pool.starmap(
-                                sort_tracked_objects, [(body,
-                                                       (height, width),
-                                                       im,
-                                                       self.detection_threshold,
-                                                       self.default_tracker,
-                                                       self.tracked_objects)])
-                            self.tracked_objects.append(new_tracked_objects)
-                            # task = pool.submit(sort_tracked_objects, height, width)
-                            # task = pool.submit(sort_tracked_objects, body, height, width, im)
-                            # self.tracked_objects = task.result()  # temp_tracked_objects
+                            self.tracked_objects_queue.put([
+                                body,
+                                (height, width),
+                                im,
+                                self.detection_threshold,
+                                self.default_tracker,
+                                self.tracked_objects_mp],
+                                block=True)
+                            # BLOCK WAIT for other PROCESS (try to wait UNBLOCKED...)
+                            self.tracked_objects_mp = \
+                                self.tracked_objects_queue_output.get(
+                                    block=True)
+                            # Create new list of tracked objects
+                            self.tracked_objects = []
+                            for object_mp in self.tracked_objects_mp:
+                                self.tracked_objects.append(
+                                    TrackedObject(
+                                        image=np.asarray(im),
+                                        tracker_alg=self.default_tracker,
+                                        fmt=FMT_TRACKER,
+                                        tracked_object_mp=object_mp))
                             task_duration += time.time() - task_start_time
                             loop_time += (end_time - start_time)
                             if n_loops % logging_loops == 0:
@@ -318,8 +341,8 @@ class ObjectDetector(object):
                         transform_depth_to_color=True)
                 log.debug(LOGGER_ASYNC_RUN_CAPTURE_LOOP,
                           msg=f'Ran capture (loop {n_loops})')
-                self.rgb_image_color_np = bgra_image_color_np[:, :, :3][..., ::-1].copy()   # maybe remove copy? ONLY COPY IN THE TF LOOP to LOWER CPU USAGE
-                # Update trackers at every loop
+                self.rgb_image_color_np = bgra_image_color_np[:, :, :3][..., ::-1]   # copy()   # maybe remove copy? ONLY COPY IN THE TF LOOP to LOWER CPU USAGE
+                # Update every tracker
                 for tracked_object in self.tracked_objects:
                     tracked_object.update(image=self.rgb_image_color_np)
                 # Show video in debugging mode
@@ -446,75 +469,79 @@ class ObjectDetector(object):
         return confDict
 
 
-def sort_tracked_objects(detection_response: str,
-                         image_shape: tuple,
-                         resized_im,
-                         detection_threshold: float,
-                         default_tracker: str,
-                         tracked_objects):
+def process_sort_tracked_objects(inbound_queue: mp.Queue, outbound_queue: mp.Queue):
     """
     Description:
         Function run on a separate process to sort tracked objects
     Args:
-        detection_Response : string containing the json response of the scored model.
-            Includes bounding boxes, scores and classes of scored items.
-        image_shape : tuple (height, width) in pixels
-        resized_im: numpy array of resized image
-        detection_threshold : float, value 0<x<1 to accept detection as an object
-        default_tracker: string, representing the constant.py file for opencv
-        tracked_objects: list of objects currently being tracked by the system
-    Returns:
-        temp_tracked_object : object's list of tracked objects.
+        inbound_queue : <class 'multiprocessing.Queue()> : contains information to process new images
+            On the queue, you will find at every iteration the following arguments on a tuple:
+                detection_Response : string containing the json response of the scored model.
+                    Includes bounding boxes, scores and classes of scored items.
+                image_shape : tuple (height, width) in pixels
+                resized_im: <class 'PIL.Image.Image'> for resized image
+                detection_threshold : float, value 0<x<1 to accept detection as an object
+                default_tracker: string, representing the constant.py file for opencv
+                tracked_objects_mp: list of <class TrackedObjectMP> currently being tracked by the system
+        outbound_queue: <class 'multiprocessing.Queue()> : contains return values :
+            temp_tracked_objects_mp : [<class TrackedObjectMP>] for tracked objects as a result of
+                the comparison with object tracsking versus dynamic scoring of model
+    Returns: None, returns through multiprocessing.Queue()
     """
-    height, width = image_shape
-    detection_boxes = detection_response['boxes']
-    detection_scores = detection_response['scores']
-    detection_classes = detection_response['classes']
-    # Find #boxes with score > thresh
-    nb_bb = np.sum(np.array(detection_scores[0]) > detection_threshold)
-    # Create a list of BoundingBoxes > thresh
-    bb_list = [BoundingBox(box=box,
-                           image_height=height,
-                           image_width=width,
-                           fmt=FMT_TF_BBOX)
-               for box in detection_boxes[0][:nb_bb]]
-    ds_list = [score for score in detection_scores[0][:nb_bb]]
-    dc_list = [cla for cla in detection_classes[0][:nb_bb]]
-    # Find best fitting BB for each tracked object
-    temp_tracked_objects = []
-    for tracked_object in tracked_objects:
-        # Find best overlapping bounding box
-        target_bb_idx = tracked_object.get_max_overlap_bb(bb_list)
-        # Update dictionnary with outcome unless target_bb == None
-        if target_bb_idx is not None:
-            tracked_object.update(
-                image=np.asarray(resized_im),
-                box=bb_list[target_bb_idx].get_bbox(),
-                fmt=FMT_TRACKER)
-            temp_tracked_objects.append(tracked_object)
-            bb_list.remove(bb_list[target_bb_idx])
-            ds_list.remove(ds_list[target_bb_idx])
-            dc_list.remove(dc_list[target_bb_idx])
-        else:
-            # Add object to temp list if seen in last 5 seconds
-            if time.time() - tracked_object.last_seen < 5:
-                temp_tracked_objects.append(
-                    tracked_object)
-            else:
+    while True:
+        try:
+            detection_response, image_shape, \
+                resized_im, detection_threshold, \
+                default_tracker, tracked_objects_mp = inbound_queue.get(block=True)
+            height, width = image_shape
+            detection_boxes = detection_response['boxes']
+            detection_scores = detection_response['scores']
+            detection_classes = detection_response['classes']
+            # Find #boxes with score > thresh
+            nb_bb = np.sum(np.array(detection_scores[0]) > detection_threshold)
+            # Create a list of BoundingBoxes > thresh
+            bb_list = [BoundingBox(box=box,
+                                   image_height=height,
+                                   image_width=width,
+                                   fmt=FMT_TF_BBOX)
+                       for box in detection_boxes[0][:nb_bb]]
+            ds_list = [score for score in detection_scores[0][:nb_bb]]
+            dc_list = [cla for cla in detection_classes[0][:nb_bb]]
+            # Find best fitting BB for each tracked object
+            temp_tracked_objects_mp = []
+            for tracked_object in tracked_objects_mp:
+                # Find best overlapping bounding box
+                target_bb_idx = tracked_object.get_max_overlap_bb(bb_list)
+                # Update dictionnary with outcome unless target_bb == None
+                if target_bb_idx is not None:
+                    tracked_object.update(
+                        image=np.asarray(resized_im),
+                        box=bb_list[target_bb_idx].get_bbox(),
+                        fmt=FMT_TRACKER)
+                    temp_tracked_objects_mp.append(tracked_object)
+                    bb_list.remove(bb_list[target_bb_idx])
+                    ds_list.remove(ds_list[target_bb_idx])
+                    dc_list.remove(dc_list[target_bb_idx])
+                else:
+                    # Add object to temp list if seen in last 5 seconds
+                    if time.time() - tracked_object.last_seen < 5:
+                        temp_tracked_objects_mp.append(
+                            tracked_object)
+                    else:
+                        log.warning(LOGGER_OBJECT_DETECTOR_SORT_TRACKED_OBJECTS,
+                                    msg=f'Deleted tracker (id={tracked_object.id})')
+            # List all unused bounding boxes and create tracker
+            for idx, bb in enumerate(bb_list):
+                new_obj = TrackedObjectMP(
+                    object_class=dc_list[idx],
+                    score=ds_list[idx],
+                    original_image_resolution=(height, width),
+                    box=bb.get_bbox(fmt=FMT_STANDARD),
+                    fmt=FMT_STANDARD)
+                temp_tracked_objects_mp.append(new_obj)
                 log.warning(LOGGER_OBJECT_DETECTOR_SORT_TRACKED_OBJECTS,
-                            msg=f'Deleted tracker (id={tracked_object.id})')
-    # List all unused bounding boxes and create tracker
-    for idx, bb in enumerate(bb_list):
-        new_obj = TrackedObject(
-            object_class=dc_list[idx],
-            score=ds_list[idx],
-            image=np.asarray(resized_im),
-            original_image_resolution=(height, width),
-            box=bb.get_bbox(fmt=FMT_STANDARD),
-            fmt=FMT_STANDARD,
-            tracker_alg=default_tracker)
-        temp_tracked_objects.append(new_obj)
-        log.warning(LOGGER_OBJECT_DETECTOR_SORT_TRACKED_OBJECTS,
-                    msg=f'Created tracker (id={new_obj.id})')
-    # Copy temp list back to object
-    return temp_tracked_objects
+                            msg=f'Created tracker (id={new_obj.id})')
+            # Copy temp list back to object
+            outbound_queue.put(temp_tracked_objects_mp, block=True)
+        except:
+            raise(f'Problem : {traceback.print_exc()}')

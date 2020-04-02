@@ -128,30 +128,28 @@ class BoundingBox(object):
 
 class TrackedObjectMP(object):
     """
-    Used to track objects that are seen by the camera
+    Used to track objects that are seen by the camera -
+    passed to the multiprocessing task without the opencv2 object
+    because it can't be pickled.
     """
     def __init__(self,
                  object_class: int,
                  score: float,
-                 image,
                  original_image_resolution: tuple,
                  box: tuple,
                  fmt='std',
                  resized_image_resolution=(300, 300),
-                 tracker_alg='kcf',
                  use_normalized_coordinates=False):
         """
         Args
             object_class = int representing the object class being tracked
             score = float for prediction score for the object (0=<x<=1)
-            image = numpy array containing image ti initialize the tracker
             original_image_resolution: tuple (height, width) of unscaled image
                 because image input may be already resized
             box = (a,b,c,d) depending on fmt for new object
             fmt: string, one of FMT_TRACKER, FMT_BBOX, FMT_STANDARD
             resized_image_resolution = (height, width) resolution
                 (300x300) by default to accelerate running the tracker
-            tracker_alg : string, one of the values in OPENCV_OBJECT_TRACKERS
             use_normalized_coordinates: bool, normalized coordinates are
                 relative to image, that would be in the tracker bounding box
         """
@@ -161,7 +159,7 @@ class TrackedObjectMP(object):
         self.score = score
         self._resized_image_resolution = resized_image_resolution
         self._original_image_resolution = original_image_resolution
-        self.tracker_alg = tracker_alg
+        # self.tracker_alg = tracker_alg
         height, width = self._original_image_resolution
         self.bounding_box = BoundingBox(
             box=box,
@@ -169,7 +167,6 @@ class TrackedObjectMP(object):
             image_width=width,
             fmt=fmt,
             use_normalized_coordinates=use_normalized_coordinates)
-        self.update(image, box, fmt=fmt)
 
     def get_max_overlap_bb(self,
                            list_bb: [BoundingBox]):
@@ -210,38 +207,66 @@ class TrackedObjectMP(object):
         overlap_area = max(0, float(overlap_x) * float(overlap_y))
         return overlap_area
 
+
+class TrackedObject(TrackedObjectMP):
+    """
+    Class used to contain the fully tracked objects.
+    """
+    def __init__(self,
+                 image,
+                 tracker_alg,
+                 tracked_object_mp=None,
+                 fmt='std',
+                 **kwargs):
+        """
+        Args:
+            image = numpy array containing image to initialize the tracker,
+            tracker_alg : string, one of the values in OPENCV_OBJECT_TRACKERS
+            tracked_object_mp : <class 'TrackedObjectMP'> containing a TrackedObjectMP
+                already created.
+            fmt: string, one of FMT_TRACKER, FMT_BBOX, FMT_STANDARD
+            **kwargs : arguments that are in the constructor of <class 'TrackedObjectMP')>
+        """
+        if tracked_object_mp is None:
+            self.tracked_object = TrackedObjectMP(**kwargs)
+        else:
+            self.tracked_object = tracked_object_mp
+        self.tracker_alg = tracker_alg
+        self.tracker = OPENCV_OBJECT_TRACKERS[self.tracker_alg]()
+        self.update(
+            image=image,
+            box=self.tracked_object.bounding_box.get_bbox(fmt='tracker'),
+            fmt=FMT_TRACKER)
+
     def update(self,
-               image,
+               image=None,
                box=None,
                fmt=None):
         """
         Description:
-            Updates tracker with new bounding box or image
+            Updates tracker with new bbox (if on a loop with
+                a new list of bounding boxes) or image if on a loop without
+                scoring
         Args:
             image: numpy array of image to update trackers with
-            box: (a,b,c,d) tuple coordinates of a bounding box with fmt
-            fmt: string, one of FMT_TRACKER, FMT_BBOX, FMT_STANDARD,
-                required if box is defined
+            box: (a,b,c,d) tuple for this object in tracker format
+            fmt: string, one of FMT_TRACKER, FMT_BBOX, FMT_STANDARD
         """
         self.last_seen = time.time()
-        if image.shape[:2] != self._resized_image_resolution:
-            image = np.asarray(Image.fromarray(image).resize(self._resized_image_resolution))
+        if image.shape[:2] != self.tracked_object._resized_image_resolution:
+            image = np.asarray(Image.fromarray(image).resize(
+                self.tracked_object._resized_image_resolution))
         if box is not None and image is not None:
             if fmt is None:
                 raise('"fmt" param is required if box is defined.')
             # updated box as per new detection -> create new tracker
-            self.bounding_box.update(box, fmt=fmt)
-            self.tracker.init(image, self.bounding_box.get_bbox(fmt=FMT_TRACKER))
+            self.tracked_object.bounding_box.update(box, fmt=fmt)
+            self.tracker.init(image, self.tracked_object.bounding_box.get_bbox(fmt=FMT_TRACKER))
 
         elif image is not None:
             # update with cv2 tracker functions
             (success, box) = self.tracker.update(image)
             if success:
-                self.bounding_box.update(box)
+                self.tracked_object.bounding_box.update(box)
         else:
             raise('Image is not defined and bbox is not defined.')
-
-
-class TrackedObject(TrackedObjectMP):
-    def __init__(self, **kwargs):
-        super(TrackedObject).__init__(**kwargs)
