@@ -138,7 +138,6 @@ class TrackedObjectMP(object):
                  original_image_resolution: tuple,
                  box: tuple,
                  fmt='std',
-                 resized_image_resolution=(300, 300),
                  use_normalized_coordinates=False):
         """
         Args
@@ -148,18 +147,14 @@ class TrackedObjectMP(object):
                 because image input may be already resized
             box = (a,b,c,d) depending on fmt for new object
             fmt: string, one of FMT_TRACKER, FMT_BBOX, FMT_STANDARD
-            resized_image_resolution = (height, width) resolution
-                (300x300) by default to accelerate running the tracker
             use_normalized_coordinates: bool, normalized coordinates are
                 relative to image, that would be in the tracker bounding box
         """
         self.id = uuid.uuid4()
         self.object_class = object_class
-        # self.last_seen = time.time()
+        self.last_seen = time.time()
         self.score = score
-        self._resized_image_resolution = resized_image_resolution
         self._original_image_resolution = original_image_resolution
-        # self.tracker_alg = tracker_alg
         height, width = self._original_image_resolution
         self.bounding_box = BoundingBox(
             box=box,
@@ -217,6 +212,7 @@ class TrackedObject(TrackedObjectMP):
                  tracker_alg,
                  tracked_object_mp=None,
                  fmt='std',
+                 resized_image_resolution=(300, 300),
                  **kwargs):
         """
         Args:
@@ -225,6 +221,8 @@ class TrackedObject(TrackedObjectMP):
             tracked_object_mp : <class 'TrackedObjectMP'> containing a TrackedObjectMP
                 already created.
             fmt: string, one of FMT_TRACKER, FMT_BBOX, FMT_STANDARD
+            resized_image_resolution = (height, width) resolution
+                (300x300) by default to accelerate running the tracker
             **kwargs : arguments that are in the constructor of <class 'TrackedObjectMP')>
         """
         if tracked_object_mp is None:
@@ -233,6 +231,7 @@ class TrackedObject(TrackedObjectMP):
             self.tracked_object = tracked_object_mp
         self.tracker_alg = tracker_alg
         self.tracker = OPENCV_OBJECT_TRACKERS[self.tracker_alg]()
+        self._resized_image_resolution = resized_image_resolution
         self.update(
             image=image,
             box=self.tracked_object.bounding_box.get_bbox(fmt='tracker'),
@@ -253,15 +252,17 @@ class TrackedObject(TrackedObjectMP):
             fmt: string, one of FMT_TRACKER, FMT_BBOX, FMT_STANDARD
         """
         self.last_seen = time.time()
-        if image.shape[:2] != self.tracked_object._resized_image_resolution:
+        if image.shape[:2] != self._resized_image_resolution:
             image = np.asarray(Image.fromarray(image).resize(
-                self.tracked_object._resized_image_resolution))
+                self._resized_image_resolution))
         if box is not None and image is not None:
             if fmt is None:
                 raise('"fmt" param is required if box is defined.')
             # updated box as per new detection -> create new tracker
             self.tracked_object.bounding_box.update(box, fmt=fmt)
-            self.tracker.init(image, self.tracked_object.bounding_box.get_bbox(fmt=FMT_TRACKER))
+            self.tracker.init(
+                image,
+                self.tracked_object.bounding_box.get_bbox(fmt=FMT_TRACKER))
 
         elif image is not None:
             # update with cv2 tracker functions

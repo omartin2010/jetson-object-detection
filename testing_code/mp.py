@@ -1,8 +1,10 @@
 from multiprocessing import Pool
 import traceback
+import time
 
 
 def f(x):
+    time.sleep(5)
     return x * x
 
 

@@ -3,6 +3,7 @@ import time
 import queue
 import traceback
 import threading
+import os
 import multiprocessing as mp
 from multiprocessing import Process
 import numpy as np
@@ -35,7 +36,8 @@ class ObjectDetector(object):
     """ main class for the object detector running on the jetson """
 
     def __init__(self, configuration: dict) -> None:
-        """camera_index: int, frozen_graph_path: str, label_map_path: str, num_classes: int) -> None:"""
+        """camera_index: int, frozen_graph_path: str,
+        label_map_path: str, num_classes: int) -> None:"""
         self.configuration = configuration
         # Adjust configuration (to make strings into constants)
         self.__adjustConfigDict(self.configuration)
@@ -71,6 +73,7 @@ class ObjectDetector(object):
             raise('Unsupported frame rate {}'.format(
                 k4a_config_dict['camera_fps']))
         self.detection_threshold = 0.5
+        self.resized_image_resolution = tuple(configuration[OBJECT_DETECTOR_CONFIG_DICT]['resized_resolution'])
         self.tracked_objects = []
         self.tracked_objects_mp = []
         self.tracked_objects_queue = mp.Queue(maxsize=1)
@@ -265,7 +268,7 @@ class ObjectDetector(object):
             while True:
                 height, width = self.rgb_image_color_np.shape[:2]
                 # Send image to bytes buffer
-                im = Image.fromarray(self.rgb_image_color_np).resize((300, 300))
+                im = Image.fromarray(self.rgb_image_color_np_resized)
                 buf = io.BytesIO()
                 im.save(buf, format='PNG')
                 base64_encoded_image = base64.b64encode(buf.getvalue())
@@ -298,10 +301,12 @@ class ObjectDetector(object):
                                     TrackedObject(
                                         image=np.asarray(im),
                                         tracker_alg=self.default_tracker,
+                                        tracked_object_mp=object_mp,
                                         fmt=FMT_TRACKER,
-                                        tracked_object_mp=object_mp))
+                                        resized_image_resolution=self.resized_image_resolution))
                             task_duration += time.time() - task_start_time
                             loop_time += (end_time - start_time)
+                            n_loops += 1
                             if n_loops % logging_loops == 0:
                                 task_duration /= logging_loops
                                 loop_time /= logging_loops
@@ -313,7 +318,6 @@ class ObjectDetector(object):
                                               f'iterations is {task_duration:.3f}s')
                                 loop_time = 0
                                 task_duration = 0
-                            n_loops += 1
                         else:
                             raise (
                                 f'HTTP response code is {response.status} for detection service...')
@@ -332,6 +336,10 @@ class ObjectDetector(object):
             # Launch the loop
             n_loops = 0
             average_duration = 0
+            average_track_object_time_duration = 0
+            average_perftimer_image_resize_time_duration = 0
+            average_peftimer_image_copy_time_duration = 0
+            perftimer_image_acquire_duration = 0
             while True:
                 start_time = time.time()
                 # Read frame from camera
@@ -339,12 +347,32 @@ class ObjectDetector(object):
                     self.k4a_device.get_capture(
                         color_only=False,
                         transform_depth_to_color=True)
-                log.debug(LOGGER_ASYNC_RUN_CAPTURE_LOOP,
-                          msg=f'Ran capture (loop {n_loops})')
-                self.rgb_image_color_np = bgra_image_color_np[:, :, :3][..., ::-1]   # copy()   # maybe remove copy? ONLY COPY IN THE TF LOOP to LOWER CPU USAGE
-                # Update every tracker
+                # log.debug(LOGGER_ASYNC_RUN_CAPTURE_LOOP,
+                        # msg=f'Ran capture (loop {n_loops})')
+                perftimer_image_acquire = time.time() - start_time
+                perftimer_image_acquire_duration += perftimer_image_acquire
+
+                # IMAGE COPY SECTION
+                peftimer_image_copy_time_start = time.time()
+                self.rgb_image_color_np = bgra_image_color_np[:, :, :3][..., ::-1].copy()   # maybe remove copy? ONLY COPY IN THE TF LOOP to LOWER CPU USAGE
+                peftimer_image_copy_time_duration = time.time() - peftimer_image_copy_time_start
+                average_peftimer_image_copy_time_duration += peftimer_image_copy_time_duration
+
+                # RESIZE IMAGE SECTION
+                perftimer_image_resize_time_start = time.time()
+                self.rgb_image_color_np_resized = np.asarray(
+                    Image.fromarray(self.rgb_image_color_np).resize(
+                        self.resized_image_resolution))
+                perftimer_image_resize_time_duration = time.time() - perftimer_image_resize_time_start
+                average_perftimer_image_resize_time_duration += perftimer_image_resize_time_duration
+
+                #### TRACKER SECTION
+                track_object_time_start = time.time()
                 for tracked_object in self.tracked_objects:
-                    tracked_object.update(image=self.rgb_image_color_np)
+                    tracked_object.update(image=self.rgb_image_color_np_resized)
+                track_object_time_duration = time.time() - track_object_time_start
+                average_track_object_time_duration += track_object_time_duration
+
                 # Show video in debugging mode
                 if self.show_video:
                     # Visualization of the results of a detection.
@@ -374,16 +402,33 @@ class ObjectDetector(object):
                         self.show_video = False
                         self.show_depth_video = False
                 duration = time.time() - start_time
-                sleep_time = max(0, duration - self.frame_duration)
+                # sleep_time = max(0, self.frame_duration - duration)
                 average_duration += duration
                 # await asyncio.sleep(sleep_time)
-                time.sleep(sleep_time)
+                # time.sleep(sleep_time)
                 n_loops += 1
                 if n_loops % 50 == 0:
                     duration_50 = average_duration
                     average_duration /= 50
+                    average_track_object_time_duration /= 50
+                    average_perftimer_image_resize_time_duration /= 50
+                    average_peftimer_image_copy_time_duration /= 50
+                    perftimer_image_acquire_duration /= 50
                     log.warning(LOGGER_ASYNC_RUN_CAPTURE_LOOP,
                                 msg=f'Ran 50 in {duration_50:.2f}s - {average_duration:.2f}s/loop or {1/average_duration:.2f} loop/sec')
+                    log.warning(LOGGER_ASYNC_RUN_CAPTURE_LOOP,
+                                msg=f'Avg Image Acquire Time = {perftimer_image_acquire_duration:.4f}s')
+                    log.warning(LOGGER_ASYNC_RUN_CAPTURE_LOOP,
+                                msg=f'Avg Image Copy Time = {average_peftimer_image_copy_time_duration:.4f}s')
+                    log.warning(LOGGER_ASYNC_RUN_CAPTURE_LOOP,
+                                msg=f'Avg Image Resize Time = {average_perftimer_image_resize_time_duration:.4f}s')
+                    log.warning(LOGGER_ASYNC_RUN_CAPTURE_LOOP,
+                                msg=f'Avg Tracker Update Time = {average_track_object_time_duration:.4f}s')
+                    average_duration = 0
+                    average_track_object_time_duration = 0
+                    average_perftimer_image_resize_time_duration = 0
+                    average_peftimer_image_copy_time_duration = 0
+                    perftimer_image_acquire_duration = 0
                 # only do this after the first loop is done
                 if n_loops == 1:
                     self.ready_queue.put_nowait('image_ready')
@@ -488,6 +533,9 @@ def process_sort_tracked_objects(inbound_queue: mp.Queue, outbound_queue: mp.Que
                 the comparison with object tracsking versus dynamic scoring of model
     Returns: None, returns through multiprocessing.Queue()
     """
+    log.warning(LOGGER_OBJECT_DETECTOR_SORT_TRACKED_OBJECTS,
+                msg=f'Starting Tracker Sorting Process : PID = {os.getpid()} ; PPID = {os.getppid()}')
+
     while True:
         try:
             detection_response, image_shape, \
@@ -514,10 +562,11 @@ def process_sort_tracked_objects(inbound_queue: mp.Queue, outbound_queue: mp.Que
                 target_bb_idx = tracked_object.get_max_overlap_bb(bb_list)
                 # Update dictionnary with outcome unless target_bb == None
                 if target_bb_idx is not None:
-                    tracked_object.update(
-                        image=np.asarray(resized_im),
-                        box=bb_list[target_bb_idx].get_bbox(),
-                        fmt=FMT_TRACKER)
+                    # tracked_object.update(
+                    #     image=np.asarray(resized_im),
+                    #     box=bb_list[target_bb_idx].get_bbox(),
+                    #     fmt=FMT_TRACKER)
+                    tracked_object.bounding_box = bb_list[target_bb_idx]
                     temp_tracked_objects_mp.append(tracked_object)
                     bb_list.remove(bb_list[target_bb_idx])
                     ds_list.remove(ds_list[target_bb_idx])

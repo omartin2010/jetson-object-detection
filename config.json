@@ -15,6 +15,7 @@
         "endpoint_hostname" : "127.0.0.1",
         "endpoint_port" : 5000,
         "endpoint_path" : "score/model/object_detector",
+        "resized_resolution" : [300,300],
         "camera_index" : 1,
         "frozen_graph_path" : "model/frozen_inference_graph.pb",
         "label_map_path" : "model/label_map.pbtxt",
