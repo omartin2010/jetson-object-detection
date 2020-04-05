@@ -3,6 +3,9 @@ import time
 import queue
 import traceback
 import threading
+from copy import deepcopy
+from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
+from publish_queues import PublishQueue
 import os
 import multiprocessing as mp
 from multiprocessing import Process
@@ -24,9 +27,12 @@ from constant import LOGGER_OBJECT_DETECTOR_MAIN, \
     LOGGER_OBJECT_DETECTOR_RUNNER, LOGGER_OBJECT_DETECTOR_ASYNC_LOOP, \
     LOGGER_OBJECT_DETECTOR_ASYNC_PROCESS_MQTT, \
     LOGGER_OBJECT_DETECTOR_KILL_SWITCH, LOGGER_ASYNC_RUN_DETECTION, \
-    LOGGER_ASYNC_RUN_CAPTURE_LOOP, LOGGER_OBJECT_DETECTOR_SORT_TRACKED_OBJECTS
+    LOGGER_ASYNC_RUN_CAPTURE_LOOP, LOGGER_OBJECT_DETECTOR_SORT_TRACKED_OBJECTS, \
+    MAX_TRACKED_OBJECTS, OPENCV_OBJECT_TRACKERS, \
+    LOGGER_OBJECT_DETECTION_PROCESS_TRACK_OPENCV_OBJECT, \
+    LOGGER_OBJECT_DETECTION_OBJECT_DETECTION_POOL_MANAGER, MAX_UNSEEN_TIME_FOR_OBJECT
 from logger import RoboLogger
-from tracked_object import BoundingBox, TrackedObject, TrackedObjectMP, \
+from tracked_object import BoundingBox, TrackedObjectMP, \
     FMT_STANDARD, FMT_TF_BBOX, FMT_TRACKER
 log = RoboLogger.getLogger()
 log.warning(LOGGER_OBJECT_DETECTOR_MAIN, msg="Libraries loaded.")
@@ -70,14 +76,15 @@ class ObjectDetector(object):
         elif k4a_config_dict['camera_fps'] == FPS.FPS_30:
             self.frame_duration = 1. / 30
         else:
-            raise('Unsupported frame rate {}'.format(
-                k4a_config_dict['camera_fps']))
+            raise Exception('Unsupported frame rate {}'.format(
+                            k4a_config_dict['camera_fps']))
         self.detection_threshold = 0.5
         self.resized_image_resolution = tuple(configuration[OBJECT_DETECTOR_CONFIG_DICT]['resized_resolution'])
-        self.tracked_objects = []
-        self.tracked_objects_mp = []
+        # self.tracked_objects_mp is a list of k,v tuples (uuid: tracked_object)
+        self.tracked_objects_mp = {}
         self.tracked_objects_queue = mp.Queue(maxsize=1)
         self.tracked_objects_queue_output = mp.Queue(maxsize=1)
+        self.image_queue = PublishQueue()
         self.default_tracker = self.configuration[OBJECT_DETECTOR_CONFIG_DICT]['open_cv_default_tracker']
 
     def run(self) -> None:
@@ -91,20 +98,35 @@ class ObjectDetector(object):
             self.k4a_device.connect()
             log.warning(LOGGER_OBJECT_DETECTOR_RUNNER,
                         msg=f'K4A device initialized...')
-            # Create Process pool
-            # self.process_pool = Pool(processes=1)
 
+            # Create Process pool for tracking objects
+            log.warning(LOGGER_OBJECT_DETECTOR_RUNNER,
+                        msg=f'Creating process pool executor for '
+                            f'{MAX_TRACKED_OBJECTS} objects...')
+            self.object_tracking_process_pool = ProcessPoolExecutor(
+                max_workers=MAX_TRACKED_OBJECTS)
+
+            # Create thread pool (for retrieving object tracking information)
+            log.warning(LOGGER_OBJECT_DETECTOR_RUNNER,
+                        msg=f'Creating thread pool executor for '
+                            f'{MAX_TRACKED_OBJECTS} objects...')
+            self.object_tracking_thread_pool = ThreadPoolExecutor(
+                max_workers=MAX_TRACKED_OBJECTS,
+                thread_name_prefix='ObjTrackingRetreive')
+
+            # region Launch Processes
+            # Create process to process image and tracked objects
             log.warning(LOGGER_OBJECT_DETECTOR_RUNNER,
                         msg=f'Creating Process to sort tracked objects')
-            # Create process to process image and tracked objects
             self.procTrackedObject = Process(
                 target=process_sort_tracked_objects,
                 name='ObjectTrackingSorter',
-                args=(
-                    self.tracked_objects_queue,
-                    self.tracked_objects_queue_output,))
+                args=(self.tracked_objects_queue,
+                      self.tracked_objects_queue_output,))
             self.procTrackedObject.start()
+            # endregion
 
+            # region Launch Threads
             # Launch the MQTT thread listener
             log.warning(LOGGER_OBJECT_DETECTOR_RUNNER,
                         msg='Launching MQTT thread.')
@@ -122,9 +144,19 @@ class ObjectDetector(object):
             # Launching capture loop thread
             log.warning(LOGGER_OBJECT_DETECTOR_RUNNER,
                         msg=f'Launching Capture Loop Thread')
-            self.captureLoopThread = threading.Thread(
+            self.capture_loop_thread = threading.Thread(
                 target=self.thread_capture_loop, name='captureLoop')
-            self.captureLoopThread.start()
+            self.capture_loop_thread.start()
+
+            # Launching Manage Object Detection Pools
+            log.warning(LOGGER_OBJECT_DETECTOR_RUNNER,
+                        msg=f'Launching Object Detection Pool and Thread Managers')
+            self.object_detection_pool_manager_thread = threading.Thread(
+                target=self.thread_object_detection_pool_manager, name='objectDetectionManager',
+                args=[0.25])
+            self.object_detection_pool_manager_thread.start()
+
+            # endregion
 
             while True:
                 try:
@@ -143,7 +175,7 @@ class ObjectDetector(object):
 
         except SystemExit:
             # raise the exception up the stack
-            raise
+            raise Exception(f'Error : {traceback.print_exc()}'))
 
         except K4AException:
             log.error(LOGGER_OBJECT_DETECTOR_RUNNER,
@@ -211,7 +243,7 @@ class ObjectDetector(object):
             log.error(LOGGER_OBJECT_DETECTOR_MQTT_LOOP,
                       f'Error : {traceback.print_exc()}')
             # Bump up the problem...
-            raise
+            raise Exception(f'Error : {traceback.print_exc()}')
 
     def thread_event_loop(self):
         """
@@ -222,16 +254,19 @@ class ObjectDetector(object):
                         msg=f'Launching asyncio event loop')
             self.eventLoop = asyncio.new_event_loop()
             asyncio.set_event_loop(self.eventLoop)
+
+            # region Create Async Tasks
             log.warning(LOGGER_OBJECT_DETECTOR_ASYNC_LOOP,
                         msg=f'Launching process MQTT message task')
             self.eventLoop.create_task(
                 self.async_process_mqtt_messages(loopDelay=0.25))
-            # log.warning(LOGGER_OBJECT_DETECTOR_ASYNC_LOOP,
-            #             msg=f'Launching async_run_capture_loop task')
-            # self.eventLoop.create_task(self.async_run_capture_loop())
+
             log.warning(LOGGER_OBJECT_DETECTOR_ASYNC_LOOP,
                         msg=f'Launching asykc_run_detection task')
-            self.eventLoop.create_task(self.async_run_detection(loopDelay=0.5))
+            self.eventLoop.create_task(
+                self.async_run_detection(loopDelay=0.5))
+            # endregion
+
             self.eventLoop.run_forever()
             log.warning(LOGGER_OBJECT_DETECTOR_ASYNC_LOOP,
                         msg=f'Asyncio event loop started')
@@ -239,7 +274,7 @@ class ObjectDetector(object):
         except Exception:
             log.error(LOGGER_OBJECT_DETECTOR_ASYNC_LOOP,
                       f'Error : {traceback.print_exc()}')
-            raise
+            raise Exception(f'Error : {traceback.print_exc()}'))
         finally:
             self.eventLoop.stop()
             self.eventLoop.close()
@@ -263,7 +298,7 @@ class ObjectDetector(object):
             # Only launch loop when ready (image on the self.rgb...)
             itm = self.ready_queue.get(block=True)
             if itm is None:
-                raise('Empty Queue...')
+                raise Exception('Empty Queue...')
             # Launch the loop
             while True:
                 height, width = self.rgb_image_color_np.shape[:2]
@@ -285,25 +320,26 @@ class ObjectDetector(object):
                             self.tracked_objects_queue.put([
                                 body,
                                 (height, width),
-                                im,
+                                # im,
                                 self.detection_threshold,
-                                self.default_tracker,
+                                # self.default_tracker,
                                 self.tracked_objects_mp],
                                 block=True)
                             # BLOCK WAIT for other PROCESS (try to wait UNBLOCKED...)
                             self.tracked_objects_mp = \
                                 self.tracked_objects_queue_output.get(
                                     block=True)
+                            # Dump image onto queue for processes to pick up
                             # Create new list of tracked objects
-                            self.tracked_objects = []
-                            for object_mp in self.tracked_objects_mp:
-                                self.tracked_objects.append(
-                                    TrackedObject(
-                                        image=np.asarray(im),
-                                        tracker_alg=self.default_tracker,
-                                        tracked_object_mp=object_mp,
-                                        fmt=FMT_TRACKER,
-                                        resized_image_resolution=self.resized_image_resolution))
+                            # self.tracked_objects = []
+                            # for object_mp in self.tracked_objects_mp:
+                            #     self.tracked_objects.append(
+                            #         TrackedObject(
+                            #             image=np.asarray(im),
+                            #             tracker_alg=self.default_tracker,
+                            #             tracked_object_mp=object_mp,
+                            #             fmt=FMT_TRACKER,
+                            #             resized_image_resolution=self.resized_image_resolution))
                             task_duration += time.time() - task_start_time
                             loop_time += (end_time - start_time)
                             n_loops += 1
@@ -319,8 +355,9 @@ class ObjectDetector(object):
                                 loop_time = 0
                                 task_duration = 0
                         else:
-                            raise (
-                                f'HTTP response code is {response.status} for detection service...')
+                            raise Exception(f'HTTP response code is '
+                                            f'{response.status} for detection'
+                                            f' service...')
                 # Pause for loopDelay seconds
                 asyncio.sleep(loopDelay)
         except Exception:
@@ -347,8 +384,7 @@ class ObjectDetector(object):
                     self.k4a_device.get_capture(
                         color_only=False,
                         transform_depth_to_color=True)
-                # log.debug(LOGGER_ASYNC_RUN_CAPTURE_LOOP,
-                        # msg=f'Ran capture (loop {n_loops})')
+                # log.debug(LOGGER_ASYNC_RUN_CAPTURE_LOOP, msg=f'Ran capture (loop {n_loops})')
                 perftimer_image_acquire = time.time() - start_time
                 perftimer_image_acquire_duration += perftimer_image_acquire
 
@@ -363,17 +399,18 @@ class ObjectDetector(object):
                 self.rgb_image_color_np_resized = np.asarray(
                     Image.fromarray(self.rgb_image_color_np).resize(
                         self.resized_image_resolution))
+                self.image_queue.publish(self.rgb_image_color_np_resized)
                 perftimer_image_resize_time_duration = time.time() - perftimer_image_resize_time_start
                 average_perftimer_image_resize_time_duration += perftimer_image_resize_time_duration
 
-                #### TRACKER SECTION
-                track_object_time_start = time.time()
-                for tracked_object in self.tracked_objects:
-                    tracked_object.update(image=self.rgb_image_color_np_resized)
-                track_object_time_duration = time.time() - track_object_time_start
-                average_track_object_time_duration += track_object_time_duration
+                # # TRACKER SECTION
+                # track_object_time_start = time.time()
+                # for tracked_object in self.tracked_objects:
+                #     tracked_object.update(image=self.rgb_image_color_np_resized)
+                # track_object_time_duration = time.time() - track_object_time_start
+                # average_track_object_time_duration += track_object_time_duration
 
-                # Show video in debugging mode
+                # Show video in debugging mode - move to other thread (that we can start on mqtt message...)
                 if self.show_video:
                     # Visualization of the results of a detection.
                     detection_boxes = [[list(obj.bounding_box.get_bbox(
@@ -416,14 +453,14 @@ class ObjectDetector(object):
                     perftimer_image_acquire_duration /= 50
                     log.warning(LOGGER_ASYNC_RUN_CAPTURE_LOOP,
                                 msg=f'Ran 50 in {duration_50:.2f}s - {average_duration:.2f}s/loop or {1/average_duration:.2f} loop/sec')
-                    log.warning(LOGGER_ASYNC_RUN_CAPTURE_LOOP,
-                                msg=f'Avg Image Acquire Time = {perftimer_image_acquire_duration:.4f}s')
-                    log.warning(LOGGER_ASYNC_RUN_CAPTURE_LOOP,
-                                msg=f'Avg Image Copy Time = {average_peftimer_image_copy_time_duration:.4f}s')
-                    log.warning(LOGGER_ASYNC_RUN_CAPTURE_LOOP,
-                                msg=f'Avg Image Resize Time = {average_perftimer_image_resize_time_duration:.4f}s')
-                    log.warning(LOGGER_ASYNC_RUN_CAPTURE_LOOP,
-                                msg=f'Avg Tracker Update Time = {average_track_object_time_duration:.4f}s')
+                    log.debug(LOGGER_ASYNC_RUN_CAPTURE_LOOP,
+                              msg=f'Avg Image Acquire Time = {perftimer_image_acquire_duration:.4f}s')
+                    log.debug(LOGGER_ASYNC_RUN_CAPTURE_LOOP,
+                              msg=f'Avg Image Copy Time = {average_peftimer_image_copy_time_duration:.4f}s')
+                    log.debug(LOGGER_ASYNC_RUN_CAPTURE_LOOP,
+                              msg=f'Avg Image Resize Time = {average_perftimer_image_resize_time_duration:.4f}s')
+                    log.debug(LOGGER_ASYNC_RUN_CAPTURE_LOOP,
+                              msg=f'Avg Tracker Update Time = {average_track_object_time_duration:.4f}s')
                     average_duration = 0
                     average_track_object_time_duration = 0
                     average_perftimer_image_resize_time_duration = 0
@@ -435,11 +472,15 @@ class ObjectDetector(object):
         except Exception:
             log.error(LOGGER_ASYNC_RUN_CAPTURE_LOOP,
                       f'Error : {traceback.print_exc()}')
-            raise (f'Error : {traceback.print_exc()}')
+            raise Exception(f'Error : {traceback.print_exc()}')
 
-    async def async_process_mqtt_messages(self, loopDelay=0.25):
+    async def async_process_mqtt_messages(self,
+                                          loopDelay=0.25):
         """
-        This function receives the messages from MQTT to run various functions on the Jetson
+        Description : This function receives the messages from MQTT to run
+            various functions on the Jetson
+        Args:
+            loopDelay: float, delay to sleep at the end of the loop
         """
         log.warning(LOGGER_OBJECT_DETECTOR_ASYNC_PROCESS_MQTT,
                     msg='Launching MQTT processing async task')
@@ -488,7 +529,106 @@ class ObjectDetector(object):
             except Exception:
                 log.error(LOGGER_OBJECT_DETECTOR_ASYNC_PROCESS_MQTT,
                           f'Error : {traceback.print_exc()}')
-                # raise
+
+    def thread_object_detection_pool_manager(self,
+                                             loop_delay=0.25):
+        """
+        Description
+            Maintains a list of processes and threads per object that's being
+                monitored by the robot.
+                During its processing, _mapping_object_process_thread would
+                look like this:
+                    {
+                        object_uuid_1 : [process_id, thread_id, ],
+                        object_uuid_2 : [process_id, thread_id, ]
+                    }
+        Args:
+            loop_delay : float : delay in the while true loop to ensure no high
+                cpu usage for nothing.
+        """
+        self._mapping_object_process_thread = {}
+        while True:
+            try:
+                temp_tracked_objects_mp = deepcopy(self.tracked_objects_mp)
+                for (tracked_object_mp_id, tracked_object_mp) in \
+                        temp_tracked_objects_mp.items():
+                    # If it's not already monitored the monitor it
+                    if tracked_object_mp_id not in self._mapping_object_process_thread.keys():
+                        tracking_object_queue = mp.Manager().Queue(maxsize=1)       # tried adding a Manager...
+                        future_proc = self.object_tracking_process_pool.submit(
+                            process_track_opencv_object,
+                            tracked_object_mp,
+                            self.default_tracker,
+                            self.frame_duration,
+                            self.image_queue.register(),
+                            tracking_object_queue)
+                        future_thread = self.object_tracking_thread_pool.submit(
+                            self.thread_poll_object_tracking_process_queue,
+                            tracked_object_mp,
+                            tracking_object_queue)
+                        # Keep track of what is under observation
+                        self._mapping_object_process_thread[tracked_object_mp_id] = \
+                            [tracking_object_queue, future_proc, future_thread]
+                    # Check if object related process/thread should be purged
+                    # (unseen for 5 seconds)
+                    if (time.time() - tracked_object_mp.last_seen) > MAX_UNSEEN_TIME_FOR_OBJECT:
+                        obj_queue, future_proc, future_thread = \
+                            self._mapping_object_process_thread[tracked_object_mp_id]
+                        # empty queue before killing proc
+                        while not obj_queue.empty():
+                            _ = obj_queue.get()
+                        if future_proc.running():
+                            log.warning(LOGGER_OBJECT_DETECTION_OBJECT_DETECTION_POOL_MANAGER,
+                                        msg=f'Attempting to cancel process for object {tracked_object_mp_id}.')
+                            res = future_proc.cancel()
+                            assert res is True, f'Unable to cancel process for tracked object {tracked_object_mp_id}'
+                        elif future_proc.done():
+                            log.warning(LOGGER_OBJECT_DETECTION_OBJECT_DETECTION_POOL_MANAGER,
+                                        msg=f'Process for object {tracked_object_mp_id} already done.')
+                        if future_thread.running():
+                            log.warning(LOGGER_OBJECT_DETECTION_OBJECT_DETECTION_POOL_MANAGER,
+                                        msg=f'Attempting to cancel thread for object {tracked_object_mp_id}.')
+                            res = future_thread.cancel()
+                            assert res is True, f'Unable to cancel thread for tracked object {tracked_object_mp_id}'
+                        elif future_thread.done():
+                            log.warning(LOGGER_OBJECT_DETECTION_OBJECT_DETECTION_POOL_MANAGER,
+                                        msg=f'Thread for object {tracked_object_mp_id} already terminated.')
+                        # Remove from dict altogether
+                        log.warning(LOGGER_OBJECT_DETECTION_OBJECT_DETECTION_POOL_MANAGER,
+                                    msg=f'Deleting object {tracked_object_mp_id} from mapping dictionnary.')
+                        self._mapping_object_process_thread.pop(tracked_object_mp_id)
+                        # remove from self.tracked
+                        log.warning(LOGGER_OBJECT_DETECTION_OBJECT_DETECTION_POOL_MANAGER,
+                                    msg=f'Deleting object {tracked_object_mp_id} from list of tracked objects.')
+                        # Remote item from dictionnary
+                        self.tracked_objects_mp.pop(tracked_object_mp_id)
+            except KeyError:
+                raise Exception(f'Problem : tried removing tracked object from '
+                                f'dictionnary but key not found. Traceback = '
+                                f'{traceback.print_exc()}')
+            except:
+                raise Exception(f'Problem : {traceback.print_exc()}')
+            time.sleep(loop_delay)
+
+    def thread_poll_object_tracking_process_queue(self,
+                                                  tracked_object_mp: TrackedObjectMP,
+                                                  tracked_object_queue: mp.Queue):
+        """
+        Description: thread to monitor objects and retrieve updated bounding box
+            coordinates - these are calculated in the associated process.
+        Args:
+            tracked_object_mp : <class TrackedObjectMP()>, object that this
+                thread is tracking the bounding box for
+            tracking_object_queue : <class 'multiprocessing.Queue()'> :
+                containing the object that has the latest bounding box
+        """
+        while True:
+            try:
+                # Replace object in tracked object with what we get from the queue
+                new_tracked_object_mp = tracked_object_queue.get(block=True)
+                self.tracked_objects_mp[new_tracked_object_mp.id] = new_tracked_object_mp
+            except:
+                raise Exception(f'Problem: {traceback.print_exc()}')
 
     def kill_switch(self):
         try:
@@ -514,20 +654,23 @@ class ObjectDetector(object):
         return confDict
 
 
-def process_sort_tracked_objects(inbound_queue: mp.Queue, outbound_queue: mp.Queue):
+def process_sort_tracked_objects(inbound_queue: mp.Queue,
+                                 outbound_queue: mp.Queue):
     """
     Description:
         Function run on a separate process to sort tracked objects
     Args:
-        inbound_queue : <class 'multiprocessing.Queue()> : contains information to process new images
-            On the queue, you will find at every iteration the following arguments on a tuple:
-                detection_Response : string containing the json response of the scored model.
-                    Includes bounding boxes, scores and classes of scored items.
+        inbound_queue : <class 'multiprocessing.Queue()> : contains
+            information to process new images. On the queue, you will find at
+            every iteration the following arguments on a tuple:
+                detection_Response : string containing the json response of
+                    the scored model. Includes bounding boxes, scores and
+                    classes of scored items.
                 image_shape : tuple (height, width) in pixels
-                resized_im: <class 'PIL.Image.Image'> for resized image
-                detection_threshold : float, value 0<x<1 to accept detection as an object
-                default_tracker: string, representing the constant.py file for opencv
-                tracked_objects_mp: list of <class TrackedObjectMP> currently being tracked by the system
+                detection_threshold : float, value 0<x<1 to accept detection
+                    as an object
+                tracked_objects_mp: [trackedObject.id (uuid), <class TrackedObjectMP>] currently being
+                    tracked by the system
         outbound_queue: <class 'multiprocessing.Queue()> : contains return values :
             temp_tracked_objects_mp : [<class TrackedObjectMP>] for tracked objects as a result of
                 the comparison with object tracsking versus dynamic scoring of model
@@ -539,8 +682,8 @@ def process_sort_tracked_objects(inbound_queue: mp.Queue, outbound_queue: mp.Que
     while True:
         try:
             detection_response, image_shape, \
-                resized_im, detection_threshold, \
-                default_tracker, tracked_objects_mp = inbound_queue.get(block=True)
+                detection_threshold, \
+                tracked_objects_mp = inbound_queue.get(block=True)
             height, width = image_shape
             detection_boxes = detection_response['boxes']
             detection_scores = detection_response['scores']
@@ -556,29 +699,18 @@ def process_sort_tracked_objects(inbound_queue: mp.Queue, outbound_queue: mp.Que
             ds_list = [score for score in detection_scores[0][:nb_bb]]
             dc_list = [cla for cla in detection_classes[0][:nb_bb]]
             # Find best fitting BB for each tracked object
-            temp_tracked_objects_mp = []
+            temp_tracked_objects_mp = {}
             for tracked_object in tracked_objects_mp:
                 # Find best overlapping bounding box
                 target_bb_idx = tracked_object.get_max_overlap_bb(bb_list)
                 # Update dictionnary with outcome unless target_bb == None
                 if target_bb_idx is not None:
-                    # tracked_object.update(
-                    #     image=np.asarray(resized_im),
-                    #     box=bb_list[target_bb_idx].get_bbox(),
-                    #     fmt=FMT_TRACKER)
-                    tracked_object.bounding_box = bb_list[target_bb_idx]
-                    temp_tracked_objects_mp.append(tracked_object)
+                    tracked_object.update_bounding_box(bb_list[target_bb_idx])
                     bb_list.remove(bb_list[target_bb_idx])
                     ds_list.remove(ds_list[target_bb_idx])
                     dc_list.remove(dc_list[target_bb_idx])
-                else:
-                    # Add object to temp list if seen in last 5 seconds
-                    if time.time() - tracked_object.last_seen < 5:
-                        temp_tracked_objects_mp.append(
-                            tracked_object)
-                    else:
-                        log.warning(LOGGER_OBJECT_DETECTOR_SORT_TRACKED_OBJECTS,
-                                    msg=f'Deleted tracker (id={tracked_object.id})')
+                # add object tuple to list
+                temp_tracked_objects_mp[tracked_object.id] = tracked_object
             # List all unused bounding boxes and create tracker
             for idx, bb in enumerate(bb_list):
                 new_obj = TrackedObjectMP(
@@ -587,10 +719,52 @@ def process_sort_tracked_objects(inbound_queue: mp.Queue, outbound_queue: mp.Que
                     original_image_resolution=(height, width),
                     box=bb.get_bbox(fmt=FMT_STANDARD),
                     fmt=FMT_STANDARD)
-                temp_tracked_objects_mp.append(new_obj)
+                temp_tracked_objects_mp[new_obj.id] = new_obj
                 log.warning(LOGGER_OBJECT_DETECTOR_SORT_TRACKED_OBJECTS,
                             msg=f'Created tracker (id={new_obj.id})')
             # Copy temp list back to object
             outbound_queue.put(temp_tracked_objects_mp, block=True)
         except:
-            raise(f'Problem : {traceback.print_exc()}')
+            raise Exception(f'Problem : {traceback.print_exc()}')
+
+
+def process_track_opencv_object(tracked_object: TrackedObjectMP,
+                                tracker_alg: str,
+                                frame_duration: float,
+                                image_queue: PublishQueue,
+                                tracking_object_queue: mp.Queue):
+    """
+    Description:
+        Function runs a process in the executorProcessPool to keep track of
+            an object using opencv's trackers.
+    Args:
+        tracked_object: <class 'TrackedObjectMP()'>, object tracked by process
+        tracker_alg : string, one of the values in OPENCV_OBJECT_TRACKERS
+        frame_duration : float, corresponds to the 1/FPS of input camera
+        image_queue: <class 'multiprocessing.Queue()'> : contains images
+            that are pushed on it in numpy format when a new image was read
+            from the video capture
+        tracking_object_queue: <class 'multiprocessing.Queue()'> : queue to publish
+            the updated tracked_object_mp (includes bbox new coordinates)
+    """
+    while True:
+        try:
+            start_time = time.time()
+            tracker = OPENCV_OBJECT_TRACKERS[tracker_alg]()
+            image = image_queue.get(block=True)
+            if image is None:
+                log.warning(LOGGER_OBJECT_DETECTION_PROCESS_TRACK_OPENCV_OBJECT,
+                            msg=f'Exiting obj tracking process for object {tracked_object.id}')
+                break
+            # Costly operation - update opencv tracker information
+            (success, box) = tracker.update(image)
+            if success:
+                tracked_object.update_bounding_box(box, fmt=FMT_TRACKER)
+                tracked_object.last_seen = time.time()
+            # Dumping tracked_object to queue
+            tracking_object_queue.put_nowait(tracked_object)
+            # Sleep if required
+            loop_duration = time.time() - start_time
+            time.sleep(max(0, frame_duration - loop_duration))
+        except:
+            raise Exception(f'Problem : {traceback.print_exc()}')
