@@ -175,7 +175,7 @@ class ObjectDetector(object):
 
         except SystemExit:
             # raise the exception up the stack
-            raise Exception(f'Error : {traceback.print_exc()}'))
+            raise Exception(f'Error : {traceback.print_exc()}')
 
         except K4AException:
             log.error(LOGGER_OBJECT_DETECTOR_RUNNER,
@@ -274,7 +274,7 @@ class ObjectDetector(object):
         except Exception:
             log.error(LOGGER_OBJECT_DETECTOR_ASYNC_LOOP,
                       f'Error : {traceback.print_exc()}')
-            raise Exception(f'Error : {traceback.print_exc()}'))
+            raise Exception(f'Error : {traceback.print_exc()}')
         finally:
             self.eventLoop.stop()
             self.eventLoop.close()
@@ -748,9 +748,9 @@ def process_track_opencv_object(tracked_object: TrackedObjectMP,
             the updated tracked_object_mp (includes bbox new coordinates)
     """
     while True:
+        tracker = OPENCV_OBJECT_TRACKERS[tracker_alg]()
         try:
             start_time = time.time()
-            tracker = OPENCV_OBJECT_TRACKERS[tracker_alg]()
             image = image_queue.get(block=True)
             if image is None:
                 log.warning(LOGGER_OBJECT_DETECTION_PROCESS_TRACK_OPENCV_OBJECT,
@@ -767,4 +767,5 @@ def process_track_opencv_object(tracked_object: TrackedObjectMP,
             loop_duration = time.time() - start_time
             time.sleep(max(0, frame_duration - loop_duration))
         except:
-            raise Exception(f'Problem : {traceback.print_exc()}')
+            raise Exception(f'Problem in process_track_opencv_object: '
+                            f'{traceback.print_exc()}')
