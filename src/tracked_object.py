@@ -194,11 +194,11 @@ class TrackedObjectMP(object):
             Area that overlaps (in pixels^2)
         """
         overlap_x = max(
-            0, min(self.bounding_box.x_max, bb.x_max) - max(
-                self.bounding_box.x_min, bb.x_min))
+            0, min(self._bounding_box.x_max, bb.x_max) - max(
+                self._bounding_box.x_min, bb.x_min))
         overlap_y = max(
-            0, min(self.bounding_box.y_max, bb.y_max) - max(
-                self.bounding_box.y_min, bb.y_min))
+            0, min(self._bounding_box.y_max, bb.y_max) - max(
+                self._bounding_box.y_min, bb.y_min))
         overlap_area = max(0, float(overlap_x) * float(overlap_y))
         return overlap_area
 
@@ -206,7 +206,7 @@ class TrackedObjectMP(object):
                             bbox: BoundingBox,
                             fmt='tracker'):
         """
-        Description : Overrides the function of the bounding box member in
+        Description : exposes bounding box member 'update' in
             order to track last_seen time
         Args:
             bbox: BoundingBox representing the new bounding box
@@ -215,6 +215,18 @@ class TrackedObjectMP(object):
         self.last_seen = time.time()
         self._bounding_box.update(bbox, fmt=fmt)
 
+    def get_bbox(self,
+                 fmt='tracker',
+                 use_normalized_coordinates=False):
+        """
+        Description :
+            exposes bounding box member to retrieve the bounding box
+        Args:
+            fmt: string, one of FMT_TRACKER, FMT_BBOX, FMT_STANDARD
+        """
+        return self._bounding_box.get_bbox(
+            fmt=fmt,
+            use_normalized_coordinates=use_normalized_coordinates)
 
 # class TrackedObject(TrackedObjectMP):
 #     """

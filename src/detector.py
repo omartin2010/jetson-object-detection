@@ -390,7 +390,7 @@ class ObjectDetector(object):
 
                 # IMAGE COPY SECTION
                 peftimer_image_copy_time_start = time.time()
-                self.rgb_image_color_np = bgra_image_color_np[:, :, :3][..., ::-1].copy()   # maybe remove copy? ONLY COPY IN THE TF LOOP to LOWER CPU USAGE
+                self.rgb_image_color_np = bgra_image_color_np[:, :, :3][..., ::-1]     # .copy()   # maybe remove copy? ONLY COPY IN THE TF LOOP to LOWER CPU USAGE
                 peftimer_image_copy_time_duration = time.time() - peftimer_image_copy_time_start
                 average_peftimer_image_copy_time_duration += peftimer_image_copy_time_duration
 
@@ -555,24 +555,27 @@ class ObjectDetector(object):
                     # If it's not already monitored the monitor it
                     if tracked_object_mp_id not in self._mapping_object_process_thread.keys():
                         tracking_object_queue = mp.Manager().Queue(maxsize=1)       # tried adding a Manager...
+                        kill_queue = mp.Queue(maxsize=1)
                         future_proc = self.object_tracking_process_pool.submit(
                             process_track_opencv_object,
                             tracked_object_mp,
                             self.default_tracker,
+                            self.rgb_image_color_np_resized,
                             self.frame_duration,
                             self.image_queue.register(),
-                            tracking_object_queue)
+                            tracking_object_queue,
+                            kill_queue)
                         future_thread = self.object_tracking_thread_pool.submit(
                             self.thread_poll_object_tracking_process_queue,
                             tracked_object_mp,
                             tracking_object_queue)
                         # Keep track of what is under observation
                         self._mapping_object_process_thread[tracked_object_mp_id] = \
-                            [tracking_object_queue, future_proc, future_thread]
+                            [tracking_object_queue, future_proc, future_thread, kill_queue]
                     # Check if object related process/thread should be purged
                     # (unseen for 5 seconds)
                     if (time.time() - tracked_object_mp.last_seen) > MAX_UNSEEN_TIME_FOR_OBJECT:
-                        obj_queue, future_proc, future_thread = \
+                        obj_queue, future_proc, future_thread, kill_queue = \
                             self._mapping_object_process_thread[tracked_object_mp_id]
                         # empty queue before killing proc
                         while not obj_queue.empty():
@@ -580,8 +583,9 @@ class ObjectDetector(object):
                         if future_proc.running():
                             log.warning(LOGGER_OBJECT_DETECTION_OBJECT_DETECTION_POOL_MANAGER,
                                         msg=f'Attempting to cancel process for object {tracked_object_mp_id}.')
+                            kill_queue.put(True)
                             res = future_proc.cancel()
-                            assert res is True, f'Unable to cancel process for tracked object {tracked_object_mp_id}'
+                            assert res is True, f'Unable pto cancel process for tracked object {tracked_object_mp_id}'
                         elif future_proc.done():
                             log.warning(LOGGER_OBJECT_DETECTION_OBJECT_DETECTION_POOL_MANAGER,
                                         msg=f'Process for object {tracked_object_mp_id} already done.')
@@ -700,7 +704,7 @@ def process_sort_tracked_objects(inbound_queue: mp.Queue,
             dc_list = [cla for cla in detection_classes[0][:nb_bb]]
             # Find best fitting BB for each tracked object
             temp_tracked_objects_mp = {}
-            for tracked_object in tracked_objects_mp:
+            for (uuid, tracked_object) in tracked_objects_mp.items():
                 # Find best overlapping bounding box
                 target_bb_idx = tracked_object.get_max_overlap_bb(bb_list)
                 # Update dictionnary with outcome unless target_bb == None
@@ -730,9 +734,11 @@ def process_sort_tracked_objects(inbound_queue: mp.Queue,
 
 def process_track_opencv_object(tracked_object: TrackedObjectMP,
                                 tracker_alg: str,
+                                initial_image: np.array,
                                 frame_duration: float,
                                 image_queue: PublishQueue,
-                                tracking_object_queue: mp.Queue):
+                                tracking_object_queue: mp.Queue,
+                                kill_queue: mp.Queue):
     """
     Description:
         Function runs a process in the executorProcessPool to keep track of
@@ -740,15 +746,21 @@ def process_track_opencv_object(tracked_object: TrackedObjectMP,
     Args:
         tracked_object: <class 'TrackedObjectMP()'>, object tracked by process
         tracker_alg : string, one of the values in OPENCV_OBJECT_TRACKERS
+        initial_image : numpy array containing the resized image that is used to
+            initialize the tracker
         frame_duration : float, corresponds to the 1/FPS of input camera
         image_queue: <class 'multiprocessing.Queue()'> : contains images
             that are pushed on it in numpy format when a new image was read
             from the video capture
-        tracking_object_queue: <class 'multiprocessing.Queue()'> : queue to publish
-            the updated tracked_object_mp (includes bbox new coordinates)
+        tracking_object_queue: <class 'multiprocessing.Queue()'> : queue to
+            publish the updated tracked_object_mp (incl. new bbox)
+        kill_queue: <class 'multiprocessing.Queue()'> : queue to track
+            requirement to shut down process
     """
-    while True:
+    kill = False
+    while not kill:
         tracker = OPENCV_OBJECT_TRACKERS[tracker_alg]()
+        tracker.init(initial_image, tracked_object.get_bbox())
         try:
             start_time = time.time()
             image = image_queue.get(block=True)
@@ -757,15 +769,20 @@ def process_track_opencv_object(tracked_object: TrackedObjectMP,
                             msg=f'Exiting obj tracking process for object {tracked_object.id}')
                 break
             # Costly operation - update opencv tracker information
-            (success, box) = tracker.update(image)
+            (success, bbox) = tracker.update(image)
             if success:
-                tracked_object.update_bounding_box(box, fmt=FMT_TRACKER)
+                tracked_object.update_bounding_box(bbox, fmt=FMT_TRACKER)
                 tracked_object.last_seen = time.time()
             # Dumping tracked_object to queue
             tracking_object_queue.put_nowait(tracked_object)
             # Sleep if required
             loop_duration = time.time() - start_time
             time.sleep(max(0, frame_duration - loop_duration))
+            try:
+                # will pull "True" if it was placed on the queue.
+                kill = kill_queue.get_nowait()
+            except queue.Empty:
+                kill = False
         except:
             raise Exception(f'Problem in process_track_opencv_object: '
                             f'{traceback.print_exc()}')
