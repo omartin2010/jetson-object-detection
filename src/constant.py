@@ -15,6 +15,7 @@ LOGGER_OBJECT_DETECTOR_KILL_SWITCH = 'obj_detector_kill_sw'
 LOGGER_OBJECT_DETECTOR_SORT_TRACKED_OBJECTS = 'obj_detector_sort_tracked_objects'
 LOGGER_OBJECT_DETECTION_PROCESS_TRACK_OPENCV_OBJECT = 'obj_detector_process_track_opencv_object'
 LOGGER_OBJECT_DETECTION_OBJECT_DETECTION_POOL_MANAGER = 'obj_detector_thread_object_detection_pool_manager'
+LOGGER_OBJECT_DETECTION_THREAD_POLL_OBJECT_TRACKING_PROCESS_QUEUE = 'obj_detector_thread_poll_object_tracking_process_queue'
 # endregion
 
 K4A_DEFINITIONS = {
@@ -46,20 +47,6 @@ OPENCV_OBJECT_TRACKERS = {
     "medianflow": cv2.TrackerMedianFlow_create,
     "mosse": cv2.TrackerMOSSE_create
 }
-MAX_TRACKED_OBJECTS = 4
-MAX_UNSEEN_TIME_FOR_OBJECT = 5
 
 # region various constants
 OBJECT_DETECTOR_CONFIG_DICT = 'object_detector'
-MAX_WORKER_THREADS = 5
-
-
-class classproperty(property):
-    def __get__(self, obj, objtype=None):
-        return super(classproperty, self).__get__(objtype)
-
-    def __set__(self, obj, value):
-        super(classproperty, self).__set__(type(obj), value)
-
-    def __delete__(self, obj):
-        super(classproperty, self).__delete__(type(obj))

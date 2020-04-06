@@ -52,8 +52,8 @@ class BoundingBox(object):
             x, y, w, h = box
             self.x_min = x
             self.x_max = x + w
-            self.y_max = self.height - y
-            self.y_min = self.y_max - self.height
+            self.y_max = self.image_height - y
+            self.y_min = self.y_max - self.image_height
         elif fmt == FMT_TF_BBOX:
             (self.y_min, self.x_min, self.y_max, self.x_max) = box
         elif fmt == FMT_STANDARD:
@@ -213,7 +213,11 @@ class TrackedObjectMP(object):
             fmt: string, one of FMT_TRACKER, FMT_BBOX, FMT_STANDARD
         """
         self.last_seen = time.time()
-        self._bounding_box.update(bbox, fmt=fmt)
+        self._bounding_box.update(
+            bbox.get_bbox(
+                fmt=fmt,
+                use_normalized_coordinates=False),
+            fmt=fmt)
 
     def get_bbox(self,
                  fmt='tracker',
@@ -227,72 +231,3 @@ class TrackedObjectMP(object):
         return self._bounding_box.get_bbox(
             fmt=fmt,
             use_normalized_coordinates=use_normalized_coordinates)
-
-# class TrackedObject(TrackedObjectMP):
-#     """
-#     Class used to contain the fully tracked objects.
-#     """
-#     def __init__(self,
-#                  image,
-#                  tracker_alg,
-#                  tracked_object_mp=None,
-#                  fmt='std',
-#                  resized_image_resolution=(300, 300),
-#                  **kwargs):
-#         """
-#         Args:
-#             image = numpy array containing image to initialize the tracker,
-#             tracker_alg : string, one of the values in OPENCV_OBJECT_TRACKERS
-#             tracked_object_mp : <class 'TrackedObjectMP'> containing a TrackedObjectMP
-#                 already created.
-#             fmt: string, one of FMT_TRACKER, FMT_BBOX, FMT_STANDARD
-#             resized_image_resolution = (height, width) resolution
-#                 (300x300) by default to accelerate running the tracker
-#             **kwargs : arguments that are in the constructor of <class 'TrackedObjectMP')>
-#         """
-#         if tracked_object_mp is None:
-#             self.tracked_object = TrackedObjectMP(**kwargs)
-#         else:
-#             self.tracked_object = tracked_object_mp
-#         self.tracker_alg = tracker_alg
-#         self.tracker = OPENCV_OBJECT_TRACKERS[self.tracker_alg]()
-#         self._resized_image_resolution = resized_image_resolution
-#         self.update(
-#             image=image,
-#             box=self.tracked_object.bounding_box.get_bbox(fmt='tracker'),
-#             fmt=FMT_TRACKER)
-
-#     def update(self,
-#                image=None,
-#                box=None,
-#                fmt=None):
-#         """
-#         Description:
-#             Updates tracker with new bbox (if on a loop with
-#                 a new list of bounding boxes) or image if on a loop without
-#                 scoring
-#         Args:
-#             image: numpy array of image to update trackers with
-#             box: (a,b,c,d) tuple for this object in tracker format
-#             fmt: string, one of FMT_TRACKER, FMT_BBOX, FMT_STANDARD
-#         """
-#         self.last_seen = time.time()
-#         if image.shape[:2] != self._resized_image_resolution:
-#             image = np.asarray(Image.fromarray(image).resize(
-#                 self._resized_image_resolution))
-#         if box is not None and image is not None:
-#             if fmt is None:
-#                 raise('"fmt" param is required if box is defined.')
-#             # updated box as per new detection -> create new tracker
-#             self.tracked_object.bounding_box.update(box, fmt=fmt)
-#             self.tracker.init(
-#                 image,
-#                 self.tracked_object.bounding_box.get_bbox(fmt=FMT_TRACKER))
-
-#         elif image is not None:
-#             # update with cv2 tracker functions
-#             (success, box) = self.tracker.update(image)
-#             if success:
-#                 self.tracked_object.bounding_box.update(box)
-#         else:
-#             raise('Image is not defined and bbox is not defined.')
