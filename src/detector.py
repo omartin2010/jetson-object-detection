@@ -4,7 +4,6 @@ import queue
 import traceback
 import threading
 from copy import deepcopy
-from concurrent.futures import ThreadPoolExecutor
 from publish_queues import PublishQueue
 import os
 import multiprocessing as mp
@@ -163,7 +162,7 @@ class ObjectDetector(object):
                     pass
                 else:
                     log.error(LOGGER_OBJECT_DETECTOR_RUNNER,
-                              'Exception handled in one of the spawned process : {}'.format(exc))
+                              msg=f'Exception handled in one of the spawned process : {exc}')
                     raise exc
                 self.eventLoopThread.join(0.2)
                 if self.eventLoopThread.isAlive():
@@ -228,12 +227,12 @@ class ObjectDetector(object):
 
         def on_connect(client, userdata, flags, rc):
             log.warning(LOGGER_OBJECT_DETECTOR_MQTT_LOOP,
-                        'Connected to MQTT broker. Result code {}'.format(str(rc)))
+                        msg=f'Connected to MQTT broker. Result code {str(rc)}')
             mqtt_connect_result, self.mqtt_connect_mid = client.subscribe(
                 self.mqtt_topics)
             if mqtt_connect_result == mqtt.MQTT_ERR_SUCCESS:
                 log.warning(LOGGER_OBJECT_DETECTOR_MQTT_LOOP,
-                            'Successfully subscribed to {}'.format(self.mqtt_topics))
+                            msg=f'Successfully subscribed to {self.mqtt_topics}')
             else:
                 log.error(LOGGER_OBJECT_DETECTOR_MQTT_LOOP,
                           'MQTT Broker subscription problem.')
@@ -242,23 +241,25 @@ class ObjectDetector(object):
             """ callback function used for the mqtt client (called when
             a new message is publisehd to one of the queues we subscribe to)
             """
-            log.info(LOGGER_OBJECT_DETECTOR_MQTT_LOOP, "Received MID {} : '{} on topic '{}' with QoS {} ".format(
-                message.mid, str(message.payload), message.topic, str(message.qos)))
+            log.info(LOGGER_OBJECT_DETECTOR_MQTT_LOOP,
+                     msg=f'Received MID {message.mid} : "{str(message.payload)}" '
+                         f'on topic {message.topic} with QoS {message.qos}')
             self.mqtt_message_queue.put_nowait(message)
 
         def on_disconnect(client, userdata, rc=0):
             """callback for handling disconnects
             """
             log.info(LOGGER_OBJECT_DETECTOR_MQTT_LOOP,
-                     "Disconnected MQTT result code = {}. Should automatically re-connect to broker".format(rc))
+                     f'Disconnected MQTT result code = {rc}. '
+                     f'Should automatically re-connect to broker')
 
         def on_subscribe(client, userdata, mid, granted_qos):
             if mid == self.mqtt_connect_mid:
                 log.warning(LOGGER_OBJECT_DETECTOR_MQTT_LOOP,
-                            "Subscribed to topics. Granted QOS = {}".format(granted_qos))
+                            msg=f'Subscribed to topics. Granted QOS = {granted_qos}')
             else:
                 log.error(LOGGER_OBJECT_DETECTOR_MQTT_LOOP,
-                          "Strange... MID doesn't match self.mqtt_connect_mid")
+                          msg=f'Strange... MID does not match self.mqtt_connect_mid')
 
         try:
             self.mqttClient = mqtt.Client(
@@ -540,13 +541,14 @@ class ObjectDetector(object):
                 cpu usage for nothing.
         """
         self._mapping_object_process_thread = {}
+        object_counter = 0
         while True:
             try:
                 temp_tracked_objects_mp = deepcopy(self.tracked_objects_mp)
                 for (tracked_object_mp_id, tracked_object_mp) in \
                         temp_tracked_objects_mp.items():
                     # If it's not already monitored the monitor it
-                    if tracked_object_mp_id not in self._mapping_object_process_thread.keys():
+                    if tracked_object_mp_id not in self._mapping_object_process_thread:      # .keys():
                         tracking_object_queue = mp.Manager().Queue(maxsize=1)       # tried adding a Manager...
                         kill_queue = mp.Manager().Queue(maxsize=1)
                         kill_thread = False
@@ -569,28 +571,15 @@ class ObjectDetector(object):
                                    False]),
                             name=f'ObjTrack_{str(tracked_object_mp_id)[:8]}')
                         thread.start()
-
-                        # future_thread = self.object_tracking_thread_pool.submit(
-                        #     self.thread_poll_object_tracking_process_queue,
-                        #     tracked_object_mp,
-                        #     tracking_object_queue,
-                        #     kill_queue)
                         # # Keep track of what is under observation
-                        self._mapping_object_process_thread = {
-                            tracked_object_mp_id:
-                                {
-                                    'tracking_object_queue': tracking_object_queue,
-                                    'proc': proc,
-                                    'thread': thread,
-                                    'kill_queue': kill_queue,
-                                    'kill_thread': kill_thread
-                                }
-                        }
-                        # self._mapping_object_process_thread[tracked_object_mp_id]['tracking_object_queue'] = tracking_object_queue
-                        # self._mapping_object_process_thread[tracked_object_mp_id]['proc'] = proc
-                        # self._mapping_object_process_thread[tracked_object_mp_id]['thread'] = thread
-                        # self._mapping_object_process_thread[tracked_object_mp_id]['kill_queue'] = kill_queue
-                        # self._mapping_object_process_thread[tracked_object_mp_id]['kill_thread'] = kill_thread
+                        self._mapping_object_process_thread[tracked_object_mp_id] = \
+                            { 'object_counter': object_counter,
+                              'tracking_object_queue': tracking_object_queue,
+                              'proc': proc,
+                              'thread': thread,
+                              'kill_queue': kill_queue,
+                              'kill_thread': kill_thread}
+                        object_counter += 1
                     # Check if object related process/thread should be purged
                     # (unseen for 5 seconds)
                     if (time.time() - tracked_object_mp.last_seen) > self.max_unseen_time_for_object:
@@ -607,9 +596,11 @@ class ObjectDetector(object):
                             log.warning(LOGGER_OBJECT_DETECTION_OBJECT_DETECTION_POOL_MANAGER,
                                         msg=f'Attempting to cancel process for object {tracked_object_mp_id}.')
                             kill_queue.put(True)
-                            exit_code = proc.join(1)
+                            proc.join(1)
+                            exitcode = proc.exitcode
                             log.warning(LOGGER_OBJECT_DETECTION_OBJECT_DETECTION_POOL_MANAGER,
-                                        msg=f'Exit code = {exit_code} for tracked object {tracked_object_mp_id}.')
+                                        msg=f'Exit code = {exitcode} for tracked object {tracked_object_mp_id}.'
+                                            f'(PID) = {proc.pid}')
                         else:         # proc done
                             log.warning(LOGGER_OBJECT_DETECTION_OBJECT_DETECTION_POOL_MANAGER,
                                         msg=f'Process for object {tracked_object_mp_id} already done.')
@@ -727,7 +718,7 @@ def process_sort_tracked_objects(inbound_queue: mp.Queue,
     """
     log.warning(LOGGER_OBJECT_DETECTOR_SORT_TRACKED_OBJECTS,
                 msg=f'Starting Tracker Sorting Process : PID = {os.getpid()}')
-    logging_loops = 50
+    logging_loops = 1
     n_loops = 0
     while True:
         try:
@@ -858,8 +849,8 @@ def process_track_opencv_object(tracked_object: TrackedObjectMP,
                     LOGGER_OBJECT_DETECTION_PROCESS_TRACK_OPENCV_OBJECT,
                     msg=f'Object tracking did not find object '
                         f'{tracked_object.id}')
-            # Dumping tracked_object to queue
-            tracking_object_queue.put_nowait(tracked_object)
+            # Dumping tracked_object to queue - block but timeout for 2s
+            tracking_object_queue.put(tracked_object, block=True, timeout=2)
             # Sleep if required
             loop_duration = time.time() - start_time
             time.sleep(max(0, frame_duration - loop_duration))
@@ -870,6 +861,11 @@ def process_track_opencv_object(tracked_object: TrackedObjectMP,
                     LOGGER_OBJECT_DETECTION_PROCESS_TRACK_OPENCV_OBJECT,
                     msg=f'Kill signal = {kill} received for process handling '
                         f'object {tracked_object.id}')
+            except queue.Full:
+                log.critical(LOGGER_OBJECT_DETECTION_PROCESS_TRACK_OPENCV_OBJECT,
+                             msg=f'Output queue full (object {{tracked_object.id}}).'
+                                 f'See thread_poll_object_tracking_process_queue '
+                                 f'to see what might be wrong.')
             except queue.Empty:
                 kill = False
             if n_loops % logging_loops == 0:
