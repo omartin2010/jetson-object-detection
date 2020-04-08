@@ -16,6 +16,7 @@ LOGGER_OBJECT_DETECTOR_SORT_TRACKED_OBJECTS = 'obj_detector_sort_tracked_objects
 LOGGER_OBJECT_DETECTION_PROCESS_TRACK_OPENCV_OBJECT = 'obj_detector_process_track_opencv_object'
 LOGGER_OBJECT_DETECTION_OBJECT_DETECTION_POOL_MANAGER = 'obj_detector_thread_object_detection_pool_manager'
 LOGGER_OBJECT_DETECTION_THREAD_POLL_OBJECT_TRACKING_PROCESS_QUEUE = 'obj_detector_thread_poll_object_tracking_process_queue'
+LOGGER_OBJECT_DETECTION_KILL = 'obj_detector_thread_poll_kill'
 # endregion
 
 K4A_DEFINITIONS = {

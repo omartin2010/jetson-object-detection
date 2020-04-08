@@ -3,8 +3,8 @@ import time
 import queue
 import traceback
 import threading
-from copy import deepcopy
 from publish_queues import PublishQueue
+import sys
 import os
 import multiprocessing as mp
 from multiprocessing import Process
@@ -28,7 +28,7 @@ from constant import LOGGER_OBJECT_DETECTOR_MAIN, \
     LOGGER_OBJECT_DETECTOR_ASYNC_PROCESS_MQTT, \
     LOGGER_OBJECT_DETECTOR_KILL_SWITCH, LOGGER_ASYNC_RUN_DETECTION, \
     LOGGER_ASYNC_RUN_CAPTURE_LOOP, LOGGER_OBJECT_DETECTOR_SORT_TRACKED_OBJECTS, \
-    OPENCV_OBJECT_TRACKERS, \
+    OPENCV_OBJECT_TRACKERS, LOGGER_OBJECT_DETECTION_KILL, \
     LOGGER_OBJECT_DETECTION_PROCESS_TRACK_OPENCV_OBJECT, \
     LOGGER_OBJECT_DETECTION_OBJECT_DETECTION_POOL_MANAGER, \
     LOGGER_OBJECT_DETECTION_THREAD_POLL_OBJECT_TRACKING_PROCESS_QUEUE
@@ -101,14 +101,6 @@ class ObjectDetector(object):
             self.k4a_device.connect()
             log.warning(LOGGER_OBJECT_DETECTOR_RUNNER,
                         msg=f'K4A device initialized...')
-
-            # Create thread pool (for retrieving object tracking information)
-            # log.warning(LOGGER_OBJECT_DETECTOR_RUNNER,
-            #             msg=f'Creating thread pool executor for '
-            #                 f'{self.max_tracked_objects} objects(s)')
-            # self.object_tracking_thread_pool = ThreadPoolExecutor(
-            #     max_workers=self.max_tracked_objects,
-            #     thread_name_prefix='ObjTracking')
 
             # region Launch Processes
             # Create process to process image and tracked objects
@@ -384,12 +376,12 @@ class ObjectDetector(object):
                 # Show video in debugging mode - move to other thread (that we can start on mqtt message...)
                 if self.show_video:
                     # Visualization of the results of a detection.
-                    detection_boxes = [[list(obj.bounding_box.get_bbox(
+                    detection_boxes = [[list(obj.get_bbox(
                         fmt=FMT_TF_BBOX,
                         use_normalized_coordinates=True))
-                        for obj in self.tracked_objects]]
-                    detection_classes = [[obj.object_class for obj in self.tracked_objects]]
-                    detection_scores = [[obj.score for obj in self.tracked_objects]]
+                        for (uuid, obj) in self.tracked_objects_mp.items()]]
+                    detection_classes = [[obj.object_class for (uuid, obj) in self.tracked_objects_mp.items()]]
+                    detection_scores = [[obj.score for (uuid, obj) in self.tracked_objects_mp.items()]]
                     bgra_image_color_np_boxes = vis_util.visualize_boxes_and_labels_on_image_array(
                         bgra_image_color_np[:, :, :3],
                         np.squeeze(detection_boxes),
@@ -422,10 +414,10 @@ class ObjectDetector(object):
                     average_perftimer_image_resize_time_duration /= 50
                     average_peftimer_image_copy_time_duration /= 50
                     perftimer_image_acquire_duration /= 50
-                    log.warning(LOGGER_ASYNC_RUN_CAPTURE_LOOP,
-                                msg=f'Ran 50 in {duration_50:.2f}s - {average_duration:.2f}s/loop or {1/average_duration:.2f} loop/sec')
-                    log.warning(LOGGER_ASYNC_RUN_CAPTURE_LOOP,
-                                msg=f'Currently monitoring {len(self.tracked_objects_mp)} objects')
+                    log.debug(LOGGER_ASYNC_RUN_CAPTURE_LOOP,
+                              msg=f'Ran 50 in {duration_50:.2f}s - {average_duration:.2f}s/loop or {1/average_duration:.2f} loop/sec')
+                    log.debug(LOGGER_ASYNC_RUN_CAPTURE_LOOP,
+                              msg=f'Currently monitoring {len(self.tracked_objects_mp)} objects')
                     log.debug(LOGGER_ASYNC_RUN_CAPTURE_LOOP,
                               msg=f'Avg Image Acquire Time = {perftimer_image_acquire_duration:.4f}s')
                     log.debug(LOGGER_ASYNC_RUN_CAPTURE_LOOP,
@@ -544,12 +536,13 @@ class ObjectDetector(object):
         object_counter = 0
         while True:
             try:
-                temp_tracked_objects_mp = deepcopy(self.tracked_objects_mp)
+                to_be_killed_tracked_objects = {}
+                # temp_tracked_objects_mp = deepcopy(self.tracked_objects_mp)
                 for (tracked_object_mp_id, tracked_object_mp) in \
-                        temp_tracked_objects_mp.items():
+                        self.tracked_objects_mp.items():
                     # If it's not already monitored the monitor it
-                    if tracked_object_mp_id not in self._mapping_object_process_thread:      # .keys():
-                        tracking_object_queue = mp.Manager().Queue(maxsize=1)       # tried adding a Manager...
+                    if tracked_object_mp_id not in self._mapping_object_process_thread:
+                        tracking_object_queue = mp.Manager().Queue(maxsize=1)
                         kill_queue = mp.Manager().Queue(maxsize=1)
                         kill_thread = False
                         proc = Process(target=process_track_opencv_object,
@@ -563,7 +556,7 @@ class ObjectDetector(object):
                                              kill_queue,))
                         proc.start()
                         log.warning(LOGGER_OBJECT_DETECTION_OBJECT_DETECTION_POOL_MANAGER,
-                                    msg=f'Launched proces {proc.pid} for object {tracked_object_mp_id}.')
+                                    msg=f'Manager launched process {proc.pid} for object {tracked_object_mp_id}.')
                         thread = threading.Thread(
                             target=self.thread_poll_object_tracking_process_queue,
                             args=([tracked_object_mp,
@@ -571,6 +564,8 @@ class ObjectDetector(object):
                                    False]),
                             name=f'ObjTrack_{str(tracked_object_mp_id)[:8]}')
                         thread.start()
+                        log.warning(LOGGER_OBJECT_DETECTION_OBJECT_DETECTION_POOL_MANAGER,
+                                    msg=f'Manager launched thread for object {tracked_object_mp_id}.')
                         # # Keep track of what is under observation
                         self._mapping_object_process_thread[tracked_object_mp_id] = \
                             { 'object_counter': object_counter,
@@ -580,56 +575,91 @@ class ObjectDetector(object):
                               'kill_queue': kill_queue,
                               'kill_thread': kill_thread}
                         object_counter += 1
-                    # Check if object related process/thread should be purged
-                    # (unseen for 5 seconds)
+                    # Check if object related process/thread should be purged (unseen for 5 seconds)
+                    # obj_queue = self._mapping_object_process_thread[tracked_object_mp_id]['tracking_object_queue']
+                    proc = self._mapping_object_process_thread[tracked_object_mp_id]['proc']
+                    thread = self._mapping_object_process_thread[tracked_object_mp_id]['thread']
+                    # kill_queue = self._mapping_object_process_thread[tracked_object_mp_id]['kill_queue']
+                    # kill_thread = self._mapping_object_process_thread[tracked_object_mp_id]['kill_thread']
+                    # If object unseen for X seconds:
                     if (time.time() - tracked_object_mp.last_seen) > self.max_unseen_time_for_object:
-                        obj_queue = self._mapping_object_process_thread[tracked_object_mp_id]['tracking_object_queue']
-                        proc = self._mapping_object_process_thread[tracked_object_mp_id]['proc']
-                        thread = self._mapping_object_process_thread[tracked_object_mp_id]['thread']
-                        kill_queue = self._mapping_object_process_thread[tracked_object_mp_id]['kill_queue']
-                        kill_thread = self._mapping_object_process_thread[tracked_object_mp_id]['kill_thread']
-                        # empty queue before killing proc
-                        while not obj_queue.empty():
-                            _ = obj_queue.get()
-                        self.image_queue.unregister(name=str(tracked_object_mp_id))
-                        if proc.is_alive():
-                            log.warning(LOGGER_OBJECT_DETECTION_OBJECT_DETECTION_POOL_MANAGER,
-                                        msg=f'Attempting to cancel process for object {tracked_object_mp_id}.')
-                            kill_queue.put(True)
-                            proc.join(1)
-                            exitcode = proc.exitcode
-                            log.warning(LOGGER_OBJECT_DETECTION_OBJECT_DETECTION_POOL_MANAGER,
-                                        msg=f'Exit code = {exitcode} for tracked object {tracked_object_mp_id}.'
-                                            f'(PID) = {proc.pid}')
-                        else:         # proc done
-                            log.warning(LOGGER_OBJECT_DETECTION_OBJECT_DETECTION_POOL_MANAGER,
-                                        msg=f'Process for object {tracked_object_mp_id} already done.')
-
-                        self._mapping_object_process_thread[tracked_object_mp_id]['kill_thread'] = True
-                        # kill_queue.put(True)
-                        thread.join(1)  # Wait 1 sec
-                        if thread.is_alive():   # .running():
-                            log.warning(LOGGER_OBJECT_DETECTION_OBJECT_DETECTION_POOL_MANAGER,
-                                        msg=f'Failed to cancel thread for object {tracked_object_mp_id}.')
-                        else:
-                            log.warning(LOGGER_OBJECT_DETECTION_OBJECT_DETECTION_POOL_MANAGER,
-                                        msg=f'Thread for object {tracked_object_mp_id} is succesfully terminated.')
-                        # Remove from dict altogether
-                        log.warning(LOGGER_OBJECT_DETECTION_OBJECT_DETECTION_POOL_MANAGER,
-                                    msg=f'Deleting object {tracked_object_mp_id} from mapping dictionnary.')
-                        self._mapping_object_process_thread.pop(tracked_object_mp_id)
-                        # remove from self.tracked
-                        log.warning(LOGGER_OBJECT_DETECTION_OBJECT_DETECTION_POOL_MANAGER,
-                                    msg=f'Deleting object {tracked_object_mp_id} from list of tracked objects.')
-                        # Remote item from dictionnary
-                        self.tracked_objects_mp.pop(tracked_object_mp_id)
-            except KeyError:
-                raise Exception(f'Problem : tried removing tracked object from '
-                                f'dictionnary but key not found. Traceback = '
-                                f'{traceback.print_exc()}')
+                        to_be_killed_tracked_objects[tracked_object_mp_id] = \
+                            self._mapping_object_process_thread[tracked_object_mp_id]
+                    else:
+                        # verify if object proc and thread are healthy.
+                        if not (proc.is_alive() and thread.is_alive()):
+                            to_be_killed_tracked_objects[tracked_object_mp_id] = \
+                                self._mapping_object_process_thread[tracked_object_mp_id]
+                # Call function that kills the threads/procs that need cleanup
+                if len(to_be_killed_tracked_objects) > 0:
+                    self.kill(to_be_killed_tracked_objects)
             except:
                 raise Exception(f'Problem : {traceback.print_exc()}')
             time.sleep(loop_delay)
+
+    def kill(self, tracked_objects):
+        """
+        Description:
+            Function used to garbage collect (remove unused threads and
+                processes) of tracked objects that dissapeared
+        Args:
+            tracked_objects: {uuid, class <tracked_object_mp> :
+                                {obj_queue, proc, thread, kill_queue, kill_thread}}
+                dict containing uuids and copies of tracked objects as well as
+                process, thread, kill_queue and obj_queue objects present in
+                the dict
+        """
+        try:
+            for (tracked_object_mp_id, tracked_object) in tracked_objects.items():
+                obj_queue = self._mapping_object_process_thread[tracked_object_mp_id]['tracking_object_queue']
+                proc = self._mapping_object_process_thread[tracked_object_mp_id]['proc']
+                thread = self._mapping_object_process_thread[tracked_object_mp_id]['thread']
+                kill_queue = self._mapping_object_process_thread[tracked_object_mp_id]['kill_queue']
+                # kill_thread = self._mapping_object_process_thread[tracked_object_mp_id]['kill_thread']
+                log.warning(LOGGER_OBJECT_DETECTION_KILL,
+                            msg=f'Object {tracked_object_mp_id} unseen for '
+                                f'{time.time() - self.tracked_objects_mp[tracked_object_mp_id].last_seen:.2f} seconds. ')
+                # empty queue before killing proc
+                while not obj_queue.empty():
+                    _ = obj_queue.get()
+                self.image_queue.unregister(name=str(tracked_object_mp_id))
+                # Terminate the process
+                kill_queue.put(True)
+                while proc.is_alive():
+                    log.warning(LOGGER_OBJECT_DETECTION_KILL,
+                                msg=f'Attempting to cancel process for object {tracked_object_mp_id}.')
+                    proc.join(2)  # Wait up to X sec
+                    exitcode = proc.exitcode
+                    log.warning(LOGGER_OBJECT_DETECTION_KILL,
+                                msg=f'Exit code = {exitcode} for tracked object {tracked_object_mp_id}.'
+                                    f'(PID) = {proc.pid}. Proc.is_alive() = {proc.is_alive()}')
+                log.warning(LOGGER_OBJECT_DETECTION_KILL,
+                            msg=f'Process {proc.pid} for object {tracked_object_mp_id} is terminated.')
+                # Terminate the thread
+                self._mapping_object_process_thread[tracked_object_mp_id]['kill_thread'] = True
+                while thread.is_alive():
+                    thread.join(2)  # Wait up to X sec
+                    if thread.is_alive():
+                        log.warning(LOGGER_OBJECT_DETECTION_KILL,
+                                    msg=f'Failed to cancel thread for object {tracked_object_mp_id}.')
+                log.warning(LOGGER_OBJECT_DETECTION_KILL,
+                            msg=f'Thread for object {tracked_object_mp_id} is terminated.')
+
+                # Remove from dict altogether
+                log.warning(LOGGER_OBJECT_DETECTION_KILL,
+                            msg=f'Deleting object {tracked_object_mp_id} from mapping dictionnary.')
+                self._mapping_object_process_thread.pop(tracked_object_mp_id)
+                # remove from self.tracked
+                log.warning(LOGGER_OBJECT_DETECTION_KILL,
+                            msg=f'Deleting object {tracked_object_mp_id} from list of tracked objects.')
+                # Remote item from dictionnary
+                self.tracked_objects_mp.pop(tracked_object_mp_id)
+        except KeyError:
+            raise Exception(f'Problem : tried removing tracked object from '
+                            f'dictionnary but key not found. Traceback = '
+                            f'{traceback.print_exc()}')
+        except:
+            raise Exception(f'Problem : {traceback.print_exc()}')
 
     def thread_poll_object_tracking_process_queue(self,
                                                   tracked_object_mp: TrackedObjectMP,
@@ -657,13 +687,13 @@ class ObjectDetector(object):
                     log.warning(LOGGER_OBJECT_DETECTION_THREAD_POLL_OBJECT_TRACKING_PROCESS_QUEUE,
                                 msg=f'Kill signal received for thread handling '
                                     f'object {tracked_object_mp.id}')
-                    break
+                    return
                 new_tracked_object_mp = tracked_object_queue.get(block=True, timeout=2)
                 # Get the new coordinates in the object.
                 self.tracked_objects_mp[new_tracked_object_mp.id] = new_tracked_object_mp
             except queue.Empty:
                 log.warning(LOGGER_OBJECT_DETECTION_THREAD_POLL_OBJECT_TRACKING_PROCESS_QUEUE,
-                            msg=f'No new object was placed on the queue, process '
+                            msg=f'No new object was placed on the queue, tracking process '
                                 f'may have been terminated by parent process.')
             except:
                 raise Exception(f'Problem: {traceback.print_exc()}')
@@ -817,6 +847,7 @@ def process_track_opencv_object(tracked_object: TrackedObjectMP,
     log.warning(LOGGER_OBJECT_DETECTION_PROCESS_TRACK_OPENCV_OBJECT,
                 f'Launching process {os.getpid()} for object ID '
                 f'{tracked_object.id}')
+    exitcode = 0
     try:
         tracker = OPENCV_OBJECT_TRACKERS[tracker_alg]()
         tracker.init(initial_image, tracked_object.get_bbox())
@@ -861,11 +892,6 @@ def process_track_opencv_object(tracked_object: TrackedObjectMP,
                     LOGGER_OBJECT_DETECTION_PROCESS_TRACK_OPENCV_OBJECT,
                     msg=f'Kill signal = {kill} received for process handling '
                         f'object {tracked_object.id}')
-            except queue.Full:
-                log.critical(LOGGER_OBJECT_DETECTION_PROCESS_TRACK_OPENCV_OBJECT,
-                             msg=f'Output queue full (object {{tracked_object.id}}).'
-                                 f'See thread_poll_object_tracking_process_queue '
-                                 f'to see what might be wrong.')
             except queue.Empty:
                 kill = False
             if n_loops % logging_loops == 0:
@@ -875,10 +901,18 @@ def process_track_opencv_object(tracked_object: TrackedObjectMP,
                         f'after {n_loops} loops - object class = '
                         f'{tracked_object.object_class}.')
             n_loops += 1
+    except queue.Full:
+        log.critical(LOGGER_OBJECT_DETECTION_PROCESS_TRACK_OPENCV_OBJECT,
+                     msg=f'Output queue full (object {{tracked_object.id}}).'
+                         f'See thread_poll_object_tracking_process_queue '
+                         f'to see what might be wrong.')
+        exitcode = 2
     except:
         raise Exception(f'Problem in process_track_opencv_object: '
                         f'{traceback.print_exc()}')
+        exitcode = 3
     finally:
         log.warning(LOGGER_OBJECT_DETECTION_PROCESS_TRACK_OPENCV_OBJECT,
                     msg=f'Exiting obj tracking process (PID {os.getpid()}) '
                         f'for object {tracked_object.id}')
+        sys.exit(exitcode)
