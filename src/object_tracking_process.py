@@ -69,13 +69,7 @@ class ObjectTrackingProcess(Process):
             n_loops = 0
             while not self.exit.is_set():
                 start_time = time.time()
-                image = self.image_queue.get(block=True)
-                if image is None:
-                    log.warning(LOGGER_OBJECT_DETECTION_PROCESS_TRACK_OPENCV_OBJECT,
-                                msg=f'Unable to retrieve image in queue for '
-                                    f'process for object ID {self.tracked_object.id}')
-                    raise Exception(f'Unable to retrieve image in queue for '
-                                    f'process for object ID {self.tracked_object.id}')
+                image = self.image_queue.get(block=True, timeout=2)
                 height, width = image.shape[:2]
                 # Costly operation - update opencv tracker information
                 (success, bbox) = tracker.update(image)
@@ -85,9 +79,9 @@ class ObjectTrackingProcess(Process):
                             box=bbox,
                             image_height=height,
                             image_width=width,
-                            fmt='tracker',
-                            use_normalized_coordinates=False),
-                        fmt=FMT_TRACKER)
+                            fmt=FMT_TRACKER,
+                            use_normalized_coordinates=False))
+                        # fmt=FMT_TRACKER)
                 else:
                     log.warning(
                         LOGGER_OBJECT_DETECTION_PROCESS_TRACK_OPENCV_OBJECT,

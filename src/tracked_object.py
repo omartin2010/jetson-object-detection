@@ -7,8 +7,11 @@ import numpy as np
 FMT_TRACKER = 'tracker'
 """
 Origin top left.
-Coordinates for box is (x, y, w, h) where x = x_min, x_max = x + h ;
-    y_max = image-height - y ; y_min - y_max = image height
+Coordinates for box is (x, y, w, h) where
+    x_min = x
+    x_max = x + w
+    y_max = image-height - y
+    y_min = y_max - h
     see (see https://docs.opencv.org/3.4/d2/d44/classcv_1_1Rect__.html)
 """
 FMT_TF_BBOX = 'tensorflow_boundingbox'
@@ -49,11 +52,11 @@ class BoundingBox(object):
         self.image_height = image_height
         self.image_width = image_width
         if fmt == FMT_TRACKER:
-            x, y, w, h = box
+            (x, y, w, h) = box
             self.x_min = x
             self.x_max = x + w
             self.y_max = self.image_height - y
-            self.y_min = self.y_max - self.image_height
+            self.y_min = self.y_max - h
         elif fmt == FMT_TF_BBOX:
             (self.y_min, self.x_min, self.y_max, self.x_max) = box
         elif fmt == FMT_STANDARD:
@@ -203,15 +206,16 @@ class TrackedObjectMP(object):
         return overlap_area
 
     def update_bounding_box(self,
-                            bbox: BoundingBox,
-                            fmt='tracker'):
+                            bbox: BoundingBox):
+                            # fmt='tracker'):
         """
-        Description : exposes bounding box member 'update' in
-            order to track last_seen time
+        Description : exposes bounding box member 'update' to track
+            update its coordinates while tracking last_seen time
         Args:
             bbox: BoundingBox representing the new bounding box
-            fmt: string, one of FMT_TRACKER, FMT_BBOX, FMT_STANDARD
+            # fmt: string, one of FMT_TRACKER, FMT_BBOX, FMT_STANDARD
         """
+        fmt = FMT_TRACKER
         self.last_seen = time.time()
         self._bounding_box.update(
             bbox.get_bbox(
