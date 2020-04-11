@@ -16,12 +16,12 @@ Coordinates for box is (x, y, w, h) where
 """
 FMT_TF_BBOX = 'tensorflow_boundingbox'
 """
-Origin is bottom left... or is it ??
+Origin is top left
 Coordinates for box is (y_min, x_min, y_max, x_max)
 """
 FMT_STANDARD = 'std'
 """
-Origin is bottom left
+Origin is top left
 Coordinates for box is (x_min, y_min, x_max, y_max)
 """
 
@@ -55,8 +55,8 @@ class BoundingBox(object):
             (x, y, w, h) = box
             self.x_min = x
             self.x_max = x + w
-            self.y_max = self.image_height - y
-            self.y_min = self.y_max - h
+            self.y_min = y
+            self.y_max = y + h
         elif fmt == FMT_TF_BBOX:
             (self.y_min, self.x_min, self.y_max, self.x_max) = box
         elif fmt == FMT_STANDARD:
@@ -69,6 +69,7 @@ class BoundingBox(object):
                 self.x_max = int(self.x_max * image_width)
                 self.y_min = int(self.y_min * image_height)
                 self.y_max = int(self.y_max * image_height)
+        self.validate_asserts()
 
     def get_bbox(self,
                  fmt='tracker',
@@ -82,10 +83,17 @@ class BoundingBox(object):
         Returns
             format = tuple (a,b,c,d) with coordinates in the proper format
         """
+        self.validate_asserts()
         if fmt == FMT_TRACKER:
-            return (self.x_min, self.image_height - self.y_max,
-                    self.x_max - self.x_min,
-                    self.y_max - self.y_min)
+            x = self.x_min
+            y = self.y_min
+            w = self.x_max - self.x_min
+            h = self.y_max - self.y_min
+            assert x >= 0, "problem - X < 0"
+            assert y >= 0, "problem - Y < 0"
+            assert w >= 0, "problem - w < 0"
+            assert h >= 0, "problem - h < 0"
+            return (x, y, w, h)
         elif fmt == FMT_TF_BBOX:
             if use_normalized_coordinates:
                 return (self.y_min / self.image_height,
@@ -121,12 +129,27 @@ class BoundingBox(object):
             (x, y, w, h) = box
             self.x_min = x
             self.x_max = x + w
-            self.y_max = self.image_height - y
-            self.y_min = self.y_max - h
+            self.y_min = y
+            self.y_max = y + h
         elif fmt == FMT_TF_BBOX:
             (self.y_min, self.x_min, self.y_max, self.x_max) = box
         elif fmt == FMT_STANDARD:
             (self.x_min, self.y_min, self.x_max, self.y_max) = box
+        self.validate_asserts()
+
+    def validate_asserts(self):
+        """
+        Description : used to validate coordinates are ok
+            at creation and upon update
+        Args: None
+        Returns : None
+        """
+        assert self.x_min >= 0, "problem - x_min < 0"
+        assert self.x_max >= 0, "problem - x_max < 0"
+        assert self.x_min <= self.x_max, "problem, x_max < x_min"
+        assert self.y_min >= 0, "problem - y_min < 0"
+        assert self.y_max >= 0, "problem - y_max < 0"
+        assert self.y_min <= self.y_max, "problem y_max < y_min"
 
 
 class TrackedObjectMP(object):
@@ -207,7 +230,7 @@ class TrackedObjectMP(object):
 
     def update_bounding_box(self,
                             bbox: BoundingBox):
-                            # fmt='tracker'):
+        # fmt='tracker'):
         """
         Description : exposes bounding box member 'update' to track
             update its coordinates while tracking last_seen time

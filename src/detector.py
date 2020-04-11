@@ -278,20 +278,18 @@ class ObjectDetector(object):
                             LOGGER_OBJECT_DETECTOR_ASYNC_PROCESS_MQTT, msg='Kill switch activated')
                         self.kill_switch()
 
-                    elif currentMQTTMoveMessage.topic == 'bot/jetson/detectObjectDisplayVideo':
+                    elif currentMQTTMoveMessage.topic == 'bot/jetson/configure':
                         log.info(LOGGER_OBJECT_DETECTOR_ASYNC_PROCESS_MQTT,
-                                 msg='Showing Video on screen (NEED A DISPLAY CONNECTED!)')
-                        if 'show_video' in msgdict:
-                            show_video = msgdict['show_video']
-                        else:
-                            show_video = True
-                        self.show_video = show_video
-                        if 'show_depth_video' in msgdict:
-                            show_depth_video = msgdict['show_depth_video']
-                        else:
-                            show_depth_video = False
-                        self.show_depth_video = show_depth_video
-
+                                 msg=f'Modifying configuration item...')
+                        for k, v in msgdict.items():
+                            if k in dir(self):
+                                log.warning(LOGGER_OBJECT_DETECTOR_ASYNC_PROCESS_MQTT,
+                                            msg=f'Setting attribute self.{k} to value {v}')
+                                # Adding / changing configuration parameters for the object
+                                self.__setattr__(k, v)
+                            else:
+                                log.warning(LOGGER_OBJECT_DETECTOR_ASYNC_PROCESS_MQTT,
+                                            msg=f'Attribute self.{k} not found. Will not add it.')
                     elif currentMQTTMoveMessage.topic == 'bot/logger':
                         # Changing the logging level on the fly...
                         log.setLevel(msgdict['logger'], lvl=msgdict['level'])
@@ -384,10 +382,7 @@ class ObjectDetector(object):
                         self.show_video = False
                         self.show_depth_video = False
                 duration = time.time() - start_time
-                # sleep_time = max(0, self.frame_duration - duration)
                 average_duration += duration
-                # await asyncio.sleep(sleep_time)
-                # time.sleep(sleep_time)
                 n_loops += 1
                 if n_loops % logging_loops == 0:
                     duration_50 = average_duration
@@ -731,7 +726,7 @@ class ObjectDetector(object):
                 if target_bb_idx is not None:
                     tracked_object.update_bounding_box(
                         bb_list[target_bb_idx])
-                        # fmt=FMT_TRACKER)
+                    # fmt=FMT_TRACKER)
                     bb_list.remove(bb_list[target_bb_idx])
                     ds_list.remove(ds_list[target_bb_idx])
                     dc_list.remove(dc_list[target_bb_idx])

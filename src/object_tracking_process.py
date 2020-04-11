@@ -81,7 +81,7 @@ class ObjectTrackingProcess(Process):
                             image_width=width,
                             fmt=FMT_TRACKER,
                             use_normalized_coordinates=False))
-                        # fmt=FMT_TRACKER)
+                    # fmt=FMT_TRACKER)
                 else:
                     log.warning(
                         LOGGER_OBJECT_DETECTION_PROCESS_TRACK_OPENCV_OBJECT,
