@@ -30,8 +30,7 @@ from constant import LOGGER_OBJECT_DETECTOR_MAIN, \
     LOGGER_OBJECT_DETECTION_KILL, LOGGER_OBJECT_DETECTION_OBJECT_DETECTION_POOL_MANAGER, \
     LOGGER_OBJECT_DETECTION_THREAD_POLL_OBJECT_TRACKING_PROCESS_QUEUE
 from logger import RoboLogger
-from tracked_object import BoundingBox, TrackedObjectMP, \
-    FMT_STANDARD, FMT_TF_BBOX, FMT_TRACKER
+from tracked_object import BoundingBox, TrackedObjectMP, FMT_TF_BBOX
 log = RoboLogger.getLogger()
 log.warning(LOGGER_OBJECT_DETECTOR_MAIN, msg="Libraries loaded.")
 
@@ -175,8 +174,7 @@ class ObjectDetector(object):
             log.warning(LOGGER_OBJECT_DETECTOR_ASYNC_LOOP,
                         msg=f'Launching asykc_run_detection task')
             self.eventLoop.create_task(
-                self.async_run_detection(
-                    loopDelay=self.time_between_scoring_service_calls))
+                self.async_run_detection())
             # endregion
 
             self.eventLoop.run_forever()
@@ -413,8 +411,7 @@ class ObjectDetector(object):
                       f'Error : {traceback.print_exc()}')
             raise Exception(f'Error : {traceback.print_exc()}')
 
-    async def async_run_detection(self,
-                                  loopDelay=0) -> None:
+    async def async_run_detection(self) -> None:
         """
         returns object detection
         delay:loopDelay:delay to pause between frames scoring
@@ -473,13 +470,13 @@ class ObjectDetector(object):
                                             f'{response.status} for detection'
                                             f' service...')
                 # Pause for loopDelay seconds
-                await asyncio.sleep(loopDelay)
+                await asyncio.sleep(self.time_between_scoring_service_calls)
         except ServerDisconnectedError:
             log.error(
                 LOGGER_ASYNC_RUN_DETECTION,
                 msg=f'HTTP prediction service error: {traceback.print_exc()} '
-                    f'-> sleeping {loopDelay}s and continuing')
-            await asyncio.sleep(loopDelay)
+                    f'-> sleeping {self.time_between_scoring_service_calls}s and continuing')
+            await asyncio.sleep(self.time_between_scoring_service_calls)
         except Exception:
             log.error(LOGGER_ASYNC_RUN_DETECTION,
                       f'Error : {traceback.print_exc()}')
@@ -506,10 +503,15 @@ class ObjectDetector(object):
         while True:
             try:
                 to_be_killed_tracked_objects = {}
-                temp_tracked_objects_mp = deepcopy(self.tracked_objects_mp)
+                # temp_tracked_objects_mp = deepcopy(self.tracked_objects_mp)
+                assert len(self.tracked_objects_mp) <= self.max_tracked_objects, \
+                    'Problem - self.max_tracked_objects > max_tracked_objects'
                 for (tracked_object_mp_id, tracked_object_mp) in \
-                        temp_tracked_objects_mp.items():
+                        self.tracked_objects_mp.items():
+                    # temp_tracked_objects_mp.items():
                     # If it's not already monitored the monitor it
+                    assert len(self._mapping_object_process_thread) <= self.max_tracked_objects, \
+                        'Problem - dict of mapping of thread + proc > max_tracked_objects'
                     if tracked_object_mp_id not in self._mapping_object_process_thread:
                         tracking_object_queue = mp.Manager().Queue(maxsize=1)
                         # kill_queue = mp.Manager().Queue(maxsize=1)
@@ -739,19 +741,24 @@ class ObjectDetector(object):
                     object_class=dc_list[idx],
                     score=ds_list[idx],
                     original_image_resolution=(height, width),
-                    box=bb.get_bbox(fmt=FMT_STANDARD),
-                    fmt=FMT_STANDARD)
+                    box=bb.get_bbox(fmt=FMT_TF_BBOX),
+                    fmt=FMT_TF_BBOX)
                 temp_new_tracked_objects_mp[new_obj.id] = new_obj
                 log.warning(LOGGER_OBJECT_DETECTOR_SORT_TRACKED_OBJECTS,
                             msg=f'Created temp tracker (id={new_obj.id})')
 
             # Combine output and get only up to max_tracked_objects items
+            # ADD ORDERED BY SCORE
             combined_temp = {**temp_new_tracked_objects_mp,
                              **temp_existing_tracked_objects_mp}
             temp_tracked_objects_mp = {k: combined_temp[k]
                                        for k in list(combined_temp)
                                        [:self.max_tracked_objects]}
+            assert len(temp_tracked_objects_mp) <= self.max_tracked_objects, \
+                'Problem - len(temp_tracked_objects_mp) > max_tracked_objects'
             # Copy temp list back to object
-            self.tracked_objects_mp = temp_tracked_objects_mp
+            self.tracked_objects_mp = deepcopy(temp_tracked_objects_mp)
+            assert len(self.tracked_objects_mp) <= self.max_tracked_objects, \
+                'Problem - len(self.max_tracked_objects) > max_tracked_objects'
         except:
             raise Exception(f'Problem : {traceback.print_exc()}')
