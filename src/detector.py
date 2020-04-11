@@ -77,6 +77,7 @@ class ObjectDetector(object):
                             k4a_config_dict['camera_fps']))
         self.detection_threshold = self.configuration[OBJECT_DETECTOR_CONFIG_DICT]['detection_threshold']
         self.resized_image_resolution = tuple(configuration[OBJECT_DETECTOR_CONFIG_DICT]['resized_resolution'])
+        self.lock_tracked_objects_mp = threading.Lock()
         self.tracked_objects_mp = {}
         self.image_queue = PublishQueue()
         self.default_tracker = self.configuration[OBJECT_DETECTOR_CONFIG_DICT]['open_cv_default_tracker']
@@ -354,12 +355,13 @@ class ObjectDetector(object):
                 # Show video in debugging mode - move to other thread (that we can start on mqtt message...)
                 if self.show_video:
                     # Visualization of the results of a detection.
-                    detection_boxes = [list(obj.get_bbox(
-                        fmt=FMT_TF_BBOX,
-                        use_normalized_coordinates=True))
-                        for (uuid, obj) in self.tracked_objects_mp.items()]
-                    detection_classes = [obj.object_class for (uuid, obj) in self.tracked_objects_mp.items()]
-                    detection_scores = [obj.score for (uuid, obj) in self.tracked_objects_mp.items()]
+                    with self.lock_tracked_objects_mp:
+                        detection_boxes = [list(obj.get_bbox(
+                            fmt=FMT_TF_BBOX,
+                            use_normalized_coordinates=True))
+                            for (uuid, obj) in self.tracked_objects_mp.items()]
+                        detection_classes = [obj.object_class for (uuid, obj) in self.tracked_objects_mp.items()]
+                        detection_scores = [obj.score for (uuid, obj) in self.tracked_objects_mp.items()]
                     bgra_image_color_np_boxes = vis_util.visualize_boxes_and_labels_on_image_array(
                         bgra_image_color_np[:, :, :3],
                         np. array(detection_boxes),
@@ -506,55 +508,56 @@ class ObjectDetector(object):
                 # temp_tracked_objects_mp = deepcopy(self.tracked_objects_mp)
                 assert len(self.tracked_objects_mp) <= self.max_tracked_objects, \
                     'Problem - self.max_tracked_objects > max_tracked_objects'
-                for (tracked_object_mp_id, tracked_object_mp) in \
-                        self.tracked_objects_mp.items():
-                    # temp_tracked_objects_mp.items():
-                    # If it's not already monitored the monitor it
-                    assert len(self._mapping_object_process_thread) <= self.max_tracked_objects, \
-                        'Problem - dict of mapping of thread + proc > max_tracked_objects'
-                    if tracked_object_mp_id not in self._mapping_object_process_thread:
-                        tracking_object_queue = mp.Manager().Queue(maxsize=1)
-                        # kill_queue = mp.Manager().Queue(maxsize=1)
-                        exit_thread_event = threading.Event()
-                        proc = ObjectTrackingProcess(tracked_object=tracked_object_mp,
-                                                     tracker_alg=self.default_tracker,
-                                                     initial_image=self.rgb_image_color_np_resized,
-                                                     frame_duration=self.frame_duration,
-                                                     image_queue=self.image_queue.register(name=str(tracked_object_mp_id)),
-                                                     tracking_object_queue=tracking_object_queue)
-                        thread = threading.Thread(target=self.thread_poll_object_tracking_process_queue,
-                                                  args=([tracked_object_mp,
-                                                         tracking_object_queue,
-                                                         exit_thread_event]),
-                                                  name=f'ObjTrack_{str(tracked_object_mp_id)[:8]}')
-                        # # Keep track of what is under observation
-                        self._mapping_object_process_thread[tracked_object_mp_id] = \
-                            { 'object_counter': object_counter,
-                              'tracking_object_queue': tracking_object_queue,
-                              'proc': proc,
-                              'thread': thread,
-                              'exit_thread_event': exit_thread_event}
-                        object_counter += 1
-                        proc.start()
-                        log.warning(LOGGER_OBJECT_DETECTION_OBJECT_DETECTION_POOL_MANAGER,
-                                    msg=f'Manager launched process {proc.pid} for object {tracked_object_mp_id}.')
-                        thread.name += f'_pid{proc.pid}'
-                        thread.start()
-                        log.warning(LOGGER_OBJECT_DETECTION_OBJECT_DETECTION_POOL_MANAGER,
-                                    msg=f'Manager launched thread for object {tracked_object_mp_id}.')
-                    # Check if object related process/thread should be purged (unseen for 5 seconds)
-                    proc = self._mapping_object_process_thread[tracked_object_mp_id]['proc']
-                    thread = self._mapping_object_process_thread[tracked_object_mp_id]['thread']
-                    # If object unseen for X seconds:
-                    unseen_time = time.time() - tracked_object_mp.last_seen
-                    if unseen_time > self.max_unseen_time_for_object:
-                        to_be_killed_tracked_objects[tracked_object_mp_id] = \
-                            self._mapping_object_process_thread[tracked_object_mp_id]
-                    else:
-                        # verify if object proc and thread are healthy - if thread or proc is dead, kill tracker
-                        if not (proc.is_alive() and thread.is_alive()):
+                with self.lock_tracked_objects_mp:
+                    for (tracked_object_mp_id, tracked_object_mp) in \
+                            self.tracked_objects_mp.items():
+                        # temp_tracked_objects_mp.items():
+                        # If it's not already monitored the monitor it
+                        assert len(self._mapping_object_process_thread) <= self.max_tracked_objects, \
+                            'Problem - dict of mapping of thread + proc > max_tracked_objects'
+                        if tracked_object_mp_id not in self._mapping_object_process_thread:
+                            tracking_object_queue = mp.Manager().Queue(maxsize=1)
+                            # kill_queue = mp.Manager().Queue(maxsize=1)
+                            exit_thread_event = threading.Event()
+                            proc = ObjectTrackingProcess(tracked_object=tracked_object_mp,
+                                                         tracker_alg=self.default_tracker,
+                                                         initial_image=self.rgb_image_color_np_resized,
+                                                         frame_duration=self.frame_duration,
+                                                         image_queue=self.image_queue.register(name=str(tracked_object_mp_id)),
+                                                         tracking_object_queue=tracking_object_queue)
+                            thread = threading.Thread(target=self.thread_poll_object_tracking_process_queue,
+                                                      args=([tracked_object_mp,
+                                                            tracking_object_queue,
+                                                            exit_thread_event]),
+                                                      name=f'ObjTrack_{str(tracked_object_mp_id)[:8]}')
+                            # # Keep track of what is under observation
+                            self._mapping_object_process_thread[tracked_object_mp_id] = \
+                                { 'object_counter': object_counter,
+                                  'tracking_object_queue': tracking_object_queue,
+                                  'proc': proc,
+                                  'thread': thread,
+                                  'exit_thread_event': exit_thread_event}
+                            object_counter += 1
+                            proc.start()
+                            log.warning(LOGGER_OBJECT_DETECTION_OBJECT_DETECTION_POOL_MANAGER,
+                                        msg=f'Manager launched process {proc.pid} for object {tracked_object_mp_id}.')
+                            thread.name += f'_pid{proc.pid}'
+                            thread.start()
+                            log.warning(LOGGER_OBJECT_DETECTION_OBJECT_DETECTION_POOL_MANAGER,
+                                        msg=f'Manager launched thread for object {tracked_object_mp_id}.')
+                        # Check if object related process/thread should be purged (unseen for 5 seconds)
+                        proc = self._mapping_object_process_thread[tracked_object_mp_id]['proc']
+                        thread = self._mapping_object_process_thread[tracked_object_mp_id]['thread']
+                        # If object unseen for X seconds:
+                        unseen_time = time.time() - tracked_object_mp.last_seen
+                        if unseen_time > self.max_unseen_time_for_object:
                             to_be_killed_tracked_objects[tracked_object_mp_id] = \
                                 self._mapping_object_process_thread[tracked_object_mp_id]
+                        else:
+                            # verify if object proc and thread are healthy - if thread or proc is dead, kill tracker
+                            if not (proc.is_alive() and thread.is_alive()):
+                                to_be_killed_tracked_objects[tracked_object_mp_id] = \
+                                    self._mapping_object_process_thread[tracked_object_mp_id]
                 # Call function that kills the threads/procs that need cleanup
                 if len(to_be_killed_tracked_objects) > 0:
                     self.kill(to_be_killed_tracked_objects)
@@ -617,7 +620,8 @@ class ObjectDetector(object):
                 log.warning(LOGGER_OBJECT_DETECTION_KILL,
                             msg=f'Deleting object {tracked_object_mp_id} from list of tracked objects.')
                 # Remote item from dictionnary
-                self.tracked_objects_mp.pop(tracked_object_mp_id)
+                with self.lock_tracked_objects_mp:
+                    self.tracked_objects_mp.pop(tracked_object_mp_id)
 
                 # Unregister specific image_queue from PublisQueue
                 self.image_queue.unregister(name=str(tracked_object_mp_id))
@@ -651,7 +655,8 @@ class ObjectDetector(object):
                 # wait max 2 second
                 new_tracked_object_mp = tracked_object_queue.get(block=True, timeout=2)
                 # Get the new coordinates in the object.
-                self.tracked_objects_mp[new_tracked_object_mp.id] = new_tracked_object_mp
+                with self.lock_tracked_objects_mp:
+                    self.tracked_objects_mp[new_tracked_object_mp.id] = new_tracked_object_mp
         except queue.Empty:
             log.warning(LOGGER_OBJECT_DETECTION_THREAD_POLL_OBJECT_TRACKING_PROCESS_QUEUE,
                         msg=f'No new object was placed on the queue, tracking process '
@@ -721,7 +726,7 @@ class ObjectDetector(object):
             dc_list = [cla for cla in detection_classes[0][:nb_bb]]
             # Find best fitting BB for each tracked object
             temp_existing_tracked_objects_mp = {}
-            for (uuid, tracked_object) in self.tracked_objects_mp.items():
+            for (uuid, tracked_object) in deepcopy(self.tracked_objects_mp).items():
                 # Find best overlapping bounding box
                 target_bb_idx = tracked_object.get_max_overlap_bb(bb_list)
                 # Update dictionnary with outcome unless target_bb == None
@@ -757,7 +762,8 @@ class ObjectDetector(object):
             assert len(temp_tracked_objects_mp) <= self.max_tracked_objects, \
                 'Problem - len(temp_tracked_objects_mp) > max_tracked_objects'
             # Copy temp list back to object
-            self.tracked_objects_mp = deepcopy(temp_tracked_objects_mp)
+            with self.lock_tracked_objects_mp:
+                self.tracked_objects_mp = deepcopy(temp_tracked_objects_mp)
             assert len(self.tracked_objects_mp) <= self.max_tracked_objects, \
                 'Problem - len(self.max_tracked_objects) > max_tracked_objects'
         except:
