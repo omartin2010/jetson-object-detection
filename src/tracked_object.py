@@ -163,6 +163,7 @@ class TrackedObjectMP(object):
                  score: float,
                  original_image_resolution: tuple,
                  box: tuple,
+                 distance=-1,
                  fmt='std',
                  use_normalized_coordinates=False):
         """
@@ -172,6 +173,7 @@ class TrackedObjectMP(object):
             original_image_resolution: tuple (height, width) of unscaled image
                 because image input may be already resized
             box = (a,b,c,d) depending on fmt for new object
+            distance = float, distance in millimeter from kinect camera
             fmt: string, one of FMT_TRACKER, FMT_BBOX, FMT_STANDARD
             use_normalized_coordinates: bool, normalized coordinates are
                 relative to image, that would be in the tracker bounding box
@@ -180,6 +182,7 @@ class TrackedObjectMP(object):
         self.object_class = object_class
         self.last_seen = time.time()
         self.score = score
+        self.distance = distance
         self._original_image_resolution = original_image_resolution
         height, width = self._original_image_resolution
         self._bounding_box = BoundingBox(
