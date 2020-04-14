@@ -3,7 +3,6 @@ import time
 import queue
 import traceback
 import threading
-import random
 from copy import deepcopy
 from publish_queues import PublishQueue
 import multiprocessing as mp
