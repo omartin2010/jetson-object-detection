@@ -26,6 +26,7 @@ class ObjectTrackingProcess(Process):
                  initial_image: np.array,
                  frame_duration: float,
                  image_queue: PublishQueue,
+                 new_tf_info_queue: mp.Queue,
                  tracking_object_queue: mp.Queue):
         """
         Description:
@@ -41,8 +42,9 @@ class ObjectTrackingProcess(Process):
                 from the video capture
             tracking_object_queue: <class 'multiprocessing.Queue()'> : queue to
                 publish the updated tracked_object_mp (incl. new bbox)
-            kill_queue: <class 'multiprocessing.Queue()'> : queue to track
-                requirement to shut down process
+            new_tf_info_queue : <class 'multiprocessing.Queue()'> : queue to contain
+                new tf_box, scores and classes discovered in the scoring thread to
+                refresh current bounding box that might have drifted over time.
         """
         Process.__init__(self)
         self.tracked_object = tracked_object
@@ -51,6 +53,7 @@ class ObjectTrackingProcess(Process):
         self.frame_duration = frame_duration
         self.image_queue = image_queue
         self.tracking_object_queue = tracking_object_queue
+        self.new_tf_info_queue = new_tf_info_queue
         self.exit = Event()
 
     def run(self):
@@ -67,26 +70,46 @@ class ObjectTrackingProcess(Process):
             tracker.init(self.initial_image, self.tracked_object.get_bbox())
             logging_loops = 50
             n_loops = 0
+            new_bbox = None
             while not self.exit.is_set():
                 start_time = time.time()
                 image = self.image_queue.get(block=True, timeout=2)
                 height, width = image.shape[:2]
-                # Costly operation - update opencv tracker information
-                (success, bbox) = tracker.update(image)
-                if success:
-                    self.tracked_object.update_bounding_box(
-                        BoundingBox(
-                            box=bbox,
-                            image_height=height,
-                            image_width=width,
-                            fmt=FMT_TRACKER,
-                            use_normalized_coordinates=False))
-                    # fmt=FMT_TRACKER)
-                else:
-                    log.warning(
-                        LOGGER_OBJECT_DETECTION_PROCESS_TRACK_OPENCV_OBJECT,
-                        msg=f'openCV tracking did not find object '
-                            f'{self.tracked_object.id}')
+                # Get new coordinates of a scored image (via TF model scoring)
+                try:
+                    new_bbox, new_score, new_class = self.new_tf_info_queue.get_nowait()
+                    tracker = None
+                    tracker = OPENCV_OBJECT_TRACKERS[self.tracker_alg]()
+                    tracker.init(image, new_bbox.get_bbox())
+                    self.tracked_object.update_bounding_box(new_bbox)
+                    self.tracked_object.score = new_score
+                    self.tracked_object.object_class = new_class
+                    log.warning(LOGGER_OBJECT_DETECTION_PROCESS_TRACK_OPENCV_OBJECT,
+                                msg=f'Getting new position from tensorflow for '
+                                    f'object {self.tracked_object.id}')
+                except queue.Empty:
+                    # Costly operation - update opencv tracker information
+                    (success, bbox) = tracker.update(image)
+                    if success:
+                        self.tracked_object.update_bounding_box(
+                            BoundingBox(
+                                box=bbox,
+                                image_height=height,
+                                image_width=width,
+                                fmt=FMT_TRACKER,
+                                use_normalized_coordinates=False))
+                        # fmt=FMT_TRACKER)
+                    else:
+                        log.warning(
+                            LOGGER_OBJECT_DETECTION_PROCESS_TRACK_OPENCV_OBJECT,
+                            msg=f'openCV tracking did not find object '
+                                f'{self.tracked_object.id}. Trying to reinitialize tracker')
+                        if new_bbox:
+                            tracker.init(image, new_bbox.get_bbox())
+                        else:
+                            tracker.init(image, self.tracked_object.get_bbox())
+                except Exception:
+                    raise Exception(f'Problem : {traceback.print_exc()}')
                 # Dumping tracked_object to queue - unless exit flag unset
                 if not self.exit.is_set():
                     self.tracking_object_queue.put(self.tracked_object, block=True, timeout=2)
@@ -96,7 +119,7 @@ class ObjectTrackingProcess(Process):
                 if n_loops % logging_loops == 0:
                     log.warning(
                         LOGGER_OBJECT_DETECTION_PROCESS_TRACK_OPENCV_OBJECT,
-                        msg=f'Process is stil tracking object {self.tracked_object.id} '
+                        msg=f'Process stil tracking {self.tracked_object.id} '
                             f'after {n_loops} loops - object class = '
                             f'{self.tracked_object.object_class}.')
                 n_loops += 1

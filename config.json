@@ -17,8 +17,7 @@
         "resized_resolution" : [300,300],
         "max_unseen_time_for_object" : 5,
         "max_tracked_objects" : 1,
-        "time_between_scoring_service_calls" : 2,
-        "camera_index": 1,
+        "time_between_scoring_service_calls" : 10,
         "frozen_graph_path": "model/frozen_inference_graph.pb",
         "label_map_path": "model/label_map.pbtxt",
         "num_classes": 2,
@@ -29,6 +28,20 @@
             "depth_mode": "K4A_DEPTH_MODE_WFOV_UNBINNED",
             "camera_fps": "K4A_FRAMES_PER_SECOND_15",
             "synchronized_images_only" : "True"
+        }
+    },
+    "object_classes": {
+        "1":
+        {
+            "class_name": "Rubik",
+            "rect_color": "255,0,0",
+            "text_color": "255,255,255"
+        },
+        "2":
+        {
+            "class_name": "Block",
+            "rect_color": "0,255,0",
+            "text_color": "0,0,0"
         }
     }
 }

@@ -42,14 +42,13 @@ def main():
         loop = asyncio.get_event_loop()
         # loop.set_debug(enabled=True)
         loop.set_exception_handler(handle_exception)
-        objectDetector = ObjectDetector(robotJetsonConfiguration, loop)
-        # objectDetector = myobj(loop)
         log.warning(LOGGER_OBJECT_DETECTOR_STARTUP,
                     msg='Launching runner.')
         signals = (signal.SIGINT, signal.SIGTERM)
         for s in signals:
             loop.add_signal_handler(s, lambda s=s: loop.create_task(
                 objectDetector.graceful_shutdown(s)))
+        objectDetector = ObjectDetector(robotJetsonConfiguration, loop)
         loop.create_task(objectDetector.run())
         loop.run_forever()
 

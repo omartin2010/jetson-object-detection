@@ -128,7 +128,8 @@ RUN rm /tmp/* -rf
 COPY docker/usr/include/k4a /usr/include/k4a/
 COPY docker/usr/lib/aarch64-linux-gnu/ /usr/lib/aarch64-linux-gnu/
 RUN pip3 uninstall -y enum34 
-RUN pip3 install jupyterlab ptvsd git+https://github.com/microsoft/debugpy.git paho-mqtt aiohttp git+https://github.com/etiennedub/pyk4a.git@0.3
+RUN pip3 install jupyterlab flake8 git+https://github.com/microsoft/debugpy.git paho-mqtt aiohttp 
+RUN pip3 install git+https://github.com/etiennedub/pyk4a.git@develop
 # RUN pip3 install jupyterlab ptvsd debugpy paho-mqtt aiohttp git+https://github.com/etiennedub/pyk4a.git@0.3
 
 WORKDIR /app

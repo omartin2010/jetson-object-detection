@@ -85,10 +85,16 @@ class BoundingBox(object):
         """
         self.validate_asserts()
         if fmt == FMT_TRACKER:
-            x = self.x_min
-            y = self.y_min
-            w = self.x_max - self.x_min
-            h = self.y_max - self.y_min
+            if use_normalized_coordinates:
+                x = self.x_min / self.image_width
+                y = self.y_min / self.image_height
+                w = (self.x_max - self.x_min) / self.image_width
+                h = (self.y_max - self.y_min) / self.image_height
+            else:
+                x = self.x_min
+                y = self.y_min
+                w = self.x_max - self.x_min
+                h = self.y_max - self.y_min
             assert x >= 0, "problem - X < 0"
             assert y >= 0, "problem - Y < 0"
             assert w >= 0, "problem - w < 0"
