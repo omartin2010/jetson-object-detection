@@ -17,11 +17,9 @@ import asyncio
 from object_tracking_process import ObjectTrackingProcess
 from aiohttp import ClientSession
 from aiohttp.client_exceptions import ServerDisconnectedError
-from pyk4a import PyK4A, K4AException, FPS
+from pyk4a import PyK4A, K4AException, FPS, Calibration, CalibrationType
 from pyk4a import Config as k4aConf
 from constant import K4A_DEFINITIONS
-# from utils import label_map_util
-# from utils import visualization_utils as vis_util
 from constant import LOGGER_OBJECT_DETECTOR_MAIN, \
     OBJECT_DETECTOR_CONFIG_DICT, LOGGER_OBJECT_DETECTOR_MQTT_LOOP, \
     LOGGER_OBJECT_DETECTOR_RUNNER, LOGGER_OBJECT_DETECTOR_ASYNC_LOOP, \
@@ -54,11 +52,17 @@ class ObjectDetector(object):
         self.exception_queue = queue.Queue()
         self.ready_queue = queue.Queue()   # used to signal that there's an image ready for processing
         k4a_config_dict = self.configuration[OBJECT_DETECTOR_CONFIG_DICT]['k4a_device']
-        self.k4a_device = PyK4A(
-            k4aConf(color_resolution=k4a_config_dict['color_resolution'],
-                    depth_mode=k4a_config_dict['depth_mode'],
-                    camera_fps=k4a_config_dict['camera_fps'],
-                    synchronized_images_only=k4a_config_dict['synchronized_images_only']))
+        self.k4a_config = k4aConf(
+            color_resolution=k4a_config_dict['color_resolution'],
+            depth_mode=k4a_config_dict['depth_mode'],
+            camera_fps=k4a_config_dict['camera_fps'],
+            synchronized_images_only=k4a_config_dict['synchronized_images_only'])
+        self.k4a_device = PyK4A(self.k4a_config)
+        self.k4a_device_calibration = Calibration(
+            device=self.k4a_device,
+            config=self.k4a_config,
+            source_calibration=CalibrationType.COLOR,
+            target_calibration=CalibrationType.GYRO)
         self.category_index = self.configuration['object_classes']
         self.__fix_category_index_dict()
         self.started_threads = {}
@@ -462,7 +466,9 @@ class ObjectDetector(object):
                             exit_thread_event: threading.Event) -> None:
         """
         Description :
-            Video capture loop (can optionally display video) for debugging purposes
+            Video capture loop (can optionally display video) for debugging purposes.
+                The loop also additionally calls __get_distance_from_k4a to keep objects
+                updated with their respective distances to the camera
         Args:
             exit_thread_event : <class 'threading.Event()'> : used to signal
                 process it's time to end.
@@ -489,10 +495,15 @@ class ObjectDetector(object):
                     Image.fromarray(self.rgb_image_color_np).resize(
                         self.resized_image_resolution))
                 self.image_queue.publish(self.rgb_image_color_np_resized)
+                self.image_depth_np_resized = np.asarray(
+                    Image.fromarray(image_depth_np).resize(
+                        self.resized_image_resolution,
+                        resample=Image.NEAREST))
                 # only do this after the first loop is done
                 if n_loops == 0:
                     self.ready_queue.put_nowait('image_ready')
-
+                # retrieve and update distance from each object
+                self.__get_distance_from_k4a()
                 # Show video in debugging mode - move to other thread (that we can start on mqtt message...)
                 if self.show_video:
                     # Visualization of the results of a detection.
@@ -873,10 +884,28 @@ class ObjectDetector(object):
                 rect_color = self.category_index[str(int(obj.object_class))]['rect_color']
                 text_color = self.category_index[str(int(obj.object_class))]['text_color']
                 class_str = self.category_index[str(int(obj.object_class))]['class_name']
-                top_str = f'Class: {class_str}(ID={str_uuid})'
-                x_size_top_str = cv2.getTextSize(top_str, cv2.FONT_HERSHEY_SIMPLEX, 0.75, 2)[0][0] + 10
-                bottom_str = f'Score: {obj.score*100:.2f}%'
-                x_size_bottom_str = cv2.getTextSize(bottom_str, cv2.FONT_HERSHEY_SIMPLEX, 0.75, 2)[0][0] + 10
+                # Top section
+                top_str_1 = f'Class: {class_str}'
+                top_str_2 = f'UUID: {str_uuid}'
+                x_size_top_str_1 = cv2.getTextSize(top_str_1, cv2.FONT_HERSHEY_SIMPLEX, 0.75, 2)[0][0] + 10
+                x_size_top_str_2 = cv2.getTextSize(top_str_2, cv2.FONT_HERSHEY_SIMPLEX, 0.75, 2)[0][0] + 10
+                x_size_top_str = max(x_size_top_str_1, x_size_top_str_2)
+                # Bottom section
+                bottom_str_1 = f'Score: {obj.score*100:.2f}%'
+                if obj.distance:
+                    bottom_str_1 += f' - Dist. : {obj.distance:.1f}mm'
+                else:
+                    bottom_str_1 += f' - Dist. : Too close.'
+                if obj.coords_3d_coordinates_center_point:
+                    bottom_str_2 = f'Coords : (' + \
+                        f'{obj.coords_3d_coordinates_center_point[0]:.1f}, ' + \
+                        f'{obj.coords_3d_coordinates_center_point[1]:.1f}, ' + \
+                        f'{obj.coords_3d_coordinates_center_point[2]:.1f})'
+                else:
+                    bottom_str_2 = f'Coords: Can\'t compute coords.'
+                x_size_bottom_str_1 = cv2.getTextSize(bottom_str_1, cv2.FONT_HERSHEY_SIMPLEX, 0.75, 2)[0][0] + 10
+                x_size_bottom_str_2 = cv2.getTextSize(bottom_str_2, cv2.FONT_HERSHEY_SIMPLEX, 0.75, 2)[0][0] + 10
+                x_size_bottom_str = max(x_size_bottom_str_1, x_size_bottom_str_2)
                 # Denormalize coordinates
                 x = int(x * width)
                 y = int(y * height)
@@ -886,11 +915,13 @@ class ObjectDetector(object):
                 # Main bounding box
                 overlay = cv2.rectangle(cv2.UMat(overlay).get(), (x, y), (x + w, y + h), rect_color, 4)
                 # Top left box with information
-                overlay = cv2.rectangle(overlay, (x, y - 33), (x + x_size_top_str, y), rect_color, thickness=-1)
-                overlay = cv2.putText(overlay, top_str, (x + 5, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.75, text_color, 2)
+                overlay = cv2.rectangle(overlay, (x, y - 63), (x + x_size_top_str, y), rect_color, thickness=-1)
+                overlay = cv2.putText(overlay, top_str_1, (x + 5, y - 40), cv2.FONT_HERSHEY_SIMPLEX, 0.75, text_color, 2)
+                overlay = cv2.putText(overlay, top_str_2, (x + 5, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.75, text_color, 2)
                 # Bottom left box with information
-                overlay = cv2.rectangle(overlay, (x, y + h), (x + x_size_bottom_str, y + h + 30), rect_color, thickness=-1)
-                overlay = cv2.putText(overlay, bottom_str, (x + 5, y + h + 22), cv2.FONT_HERSHEY_SIMPLEX, 0.75, text_color, 2)
+                overlay = cv2.rectangle(overlay, (x, y + h), (x + x_size_bottom_str, y + h + 60), rect_color, thickness=-1)
+                overlay = cv2.putText(overlay, bottom_str_1, (x + 5, y + h + 22), cv2.FONT_HERSHEY_SIMPLEX, 0.75, text_color, 2)
+                overlay = cv2.putText(overlay, bottom_str_2, (x + 5, y + h + 52), cv2.FONT_HERSHEY_SIMPLEX, 0.75, text_color, 2)
             output = cv2.addWeighted(cv2.UMat(overlay).get(), alpha, cv2.UMat(output).get(), (1 - alpha), 0, cv2.UMat(output).get())
             return output
         except Exception:
@@ -991,3 +1022,36 @@ class ObjectDetector(object):
                                     f'configuration change')
         except:
             raise Exception(f'Problem : {traceback.print_exc()}')
+
+    def __get_distance_from_k4a(self):
+        """
+        Description:
+            Retrieve the distance from a specific object to the camera lens.
+        Args: None
+        Returns : float, distance in mm from specific point on camera
+        """
+        try:
+            # For each object
+            for (uuid, obj) in self.tracked_objects_mp.items():
+                # Get object coordinates in the image
+                (x, y, w, h) = obj.get_bbox(
+                    fmt='tracker',
+                    use_normalized_coordinates=True)
+                x = int(x * self.resized_image_resolution[0])
+                y = int(y * self.resized_image_resolution[1])
+                w = int(w * self.resized_image_resolution[0])
+                h = int(h * self.resized_image_resolution[1])
+                cropped_depth_map = self.image_depth_np_resized[y: y + h, x: x + w]
+                obj.distance = np.round(np.average(cropped_depth_map))
+                center_point = [int(x + w / 2), int(y + h / 2)]
+                depth_center_point = self.image_depth_np_resized[center_point[1], center_point[0]]
+                (valid, coords) = self.k4a_device_calibration.convert_2d_to_3d(
+                    center_point,
+                    depth_center_point)
+                if valid:
+                    obj.coords_3d_coordinates_center_point = coords
+                else:
+                    obj.coords_3d_coordinates_center_point = None
+        except Exception:
+            raise Exception(f'Problem with __get_distance_from_k4a : {traceback.print_exc()}')
+        pass

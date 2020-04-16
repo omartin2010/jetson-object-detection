@@ -21,14 +21,15 @@ Issues to deal with soon:
 - [X] ~~Remove Tensorflow (remove-tensorflow branch) : ~~
     - [X] ~~almost done! - need to add actual class name to object and get rid of the self.category thing...~~
 - [X] ~~Run development from container (vscode-remote-container)~~
-- [ ] Find a way to remove dangling processes (maybe garbage collecting some unused queues...???)
-- [ ] Figure out distance to object... and propagate it.
+- [X] ~~Figure out distance to object... and propagate it.~~
+- [X] ~~Updating not only tracking position but score as the TF scoring varies~~
 - [ ] Tracking Stability :
+    - [ ] Find a way to remove dangling processes (maybe garbage collecting some unused queues...???)
     - [ ] Need to debug processes when there are 4-5 objects... seems to get confused.
     - [ ] Abiltity to track N objects
     - [ ] Validate that we can remove all objects and they dissapear
     - [ ] Check that K4A still works all the time when removing objects.
-- [ ] Updating not only tracking position but score as the TF scoring varies
+- [ ] Add ability to save video and tell it where to send it to (local storage, azure blob?)
 - [X] CPU usage :
 
 | Nb Objects    |   Cpu Usage (from docker stats)   |
@@ -37,6 +38,6 @@ Issues to deal with soon:
 | 2             |   210 %                           |
 | 3             |   210 %                           |
 | 4             |   210 %                           |
-|
+
 
 
