@@ -95,37 +95,36 @@ class ObjectDetector(object):
         self.max_tracked_objects = self.configuration[OBJECT_DETECTOR_CONFIG_DICT]['max_tracked_objects']
         self._time_between_scoring_service_calls = self.configuration[OBJECT_DETECTOR_CONFIG_DICT]['time_between_scoring_service_calls']
         self.eventLoop = loop
-        self._is_recording = False
 
-    @property
-    def max_unseen_time_for_object(self):
-        return self._max_unseen_time_for_object
+    # @property
+    # def max_unseen_time_for_object(self):
+    #     return self._max_unseen_time_for_object
 
-    @max_unseen_time_for_object.setter
-    def max_unseen_time_for_object(self, value):
-        if value < self.time_between_scoring_service_calls:
-            self._max_unseen_time_for_object = value
-        else:
-            log.error('PROPERTY',
-                      msg=f'Value for max_unseen_time_for_object needs to '
-                          f'be less than time_between_scoring_service_calls '
-                          f'({self.time_between_scoring_service_calls}). Keeping '
-                          f'current value of {self._max_unseen_time_for_object}')
+    # @max_unseen_time_for_object.setter
+    # def max_unseen_time_for_object(self, value):
+    #     if value < self.time_between_scoring_service_calls:
+    #         self._max_unseen_time_for_object = value
+    #     else:
+    #         log.error('PROPERTY',
+    #                   msg=f'Value for max_unseen_time_for_object needs to '
+    #                       f'be less than time_between_scoring_service_calls '
+    #                       f'({self.time_between_scoring_service_calls}). Keeping '
+    #                       f'current value of {self._max_unseen_time_for_object}')
 
-    @property
-    def time_between_scoring_service_calls(self):
-        return self._time_between_scoring_service_calls
+    # @property
+    # def time_between_scoring_service_calls(self):
+    #     return self._time_between_scoring_service_calls
 
-    @time_between_scoring_service_calls.setter
-    def time_between_scoring_service_calls(self, value):
-        if value > self.max_unseen_time_for_object:
-            self._time_between_scoring_service_calls = value
-        else:
-            log.error('PROPERTY',
-                      msg=f'Value for time_between_scoring_service_calls needs to '
-                          f'be more than max_unseen_time_for_object '
-                          f'({self.max_unseen_time_for_object}). Keeping '
-                          f'current value of {self._time_between_scoring_service_calls}')
+    # @time_between_scoring_service_calls.setter
+    # def time_between_scoring_service_calls(self, value):
+    #     if value > self.max_unseen_time_for_object:
+    #         self._time_between_scoring_service_calls = value
+    #     else:
+    #         log.error('PROPERTY',
+    #                   msg=f'Value for time_between_scoring_service_calls needs to '
+    #                       f'be more than max_unseen_time_for_object '
+    #                       f'({self.max_unseen_time_for_object}). Keeping '
+    #                       f'current value of {self._time_between_scoring_service_calls}')
 
     @property
     def show_video(self):
@@ -513,21 +512,19 @@ class ObjectDetector(object):
                     self.ready_queue.put_nowait('image_ready')
                 # retrieve and update distance from each object
                 self.__get_distance_from_k4a()
+                # Visualization of the results of a detection.
+                with self.lock_tracked_objects_mp:
+                    temp_items = deepcopy(self.tracked_objects_mp)
+                img = bgra_image_color_np[:, :, :3]
+                img = self.__update_image_with_info(img, temp_items)
+                self.resized_im = cv2.resize(img, self.display_image_resolution)
                 # Show video in debugging mode - move to other thread (that we can start on mqtt message...)
-                if self.show_video or self._is_recording:
-                    # Visualization of the results of a detection.
-                    with self.lock_tracked_objects_mp:
-                        temp_items = deepcopy(self.tracked_objects_mp)
-                    img = bgra_image_color_np[:, :, :3]
-                    img = self.__update_image_with_info(img, temp_items)
-                    resized_im = cv2.resize(img, self.display_image_resolution)
-                    if self.show_video:
-                        cv2.imshow('show_video', resized_im)
-                    if self._is_recording:
-                        self.video_writer.write(cv2.UMat(resized_im))
+                if self.show_video:
+                    cv2.imshow('show_video', self.resized_im)
                 if self.show_depth_video:
-                    cv2.imshow('show_depth_video', cv2.resize(
-                        image_depth_np, self.display_image_resolution))
+                    resized_depth_im = cv2.resize(
+                        image_depth_np, self.display_image_resolution)
+                    cv2.imshow('show_depth_video', resized_depth_im)
                 if self.show_depth_video or self.show_video:
                     if cv2.waitKey(1) & 0xFF == ord('q'):
                         cv2.destroyAllWindows()
@@ -559,29 +556,42 @@ class ObjectDetector(object):
             duration : float, represents the duration of time for which
                 to enable the recording
         """
+        keep_file_time = 60
         try:
+            start_time = time.time()
             # Create temp dir
             with tempfile.TemporaryDirectory() as tmpdirname:
                 # Create temp file
                 filename = os.path.join(
                     tmpdirname,
-                    next(tempfile._get_candidate_names()) + '.mp4')
+                    next(tempfile._get_candidate_names()) + '.avi')
                 log.warning(LOGGER_OBJECT_DETEECTION_ASYNC_RECORD_VIDEO,
-                            msg=f'Created file {filename} to store '
-                                f'video.')
+                            msg=f'Created file {filename} to store video. '
+                                f'Recording resolution = display resolution = '
+                                f'{self.display_image_resolution}')
                 self.video_writer = cv2.VideoWriter(
                     filename, self._fourcc,
                     float(self.fps), self.display_image_resolution)
                 # wait for duration seconds for recording to take place
                 log.warning(LOGGER_OBJECT_DETEECTION_ASYNC_RECORD_VIDEO,
-                            msg=f'Starting video recording now.')
-                self._is_recording = True
-                await asyncio.sleep(duration)
-                log.warning(LOGGER_OBJECT_DETEECTION_ASYNC_RECORD_VIDEO,
-                            msg=f'Stopping video recording now.')
+                            msg=f'Recording video to {filename} now.')
+                while time.time() - start_time < duration:
+                    loop_start = time.time()
+                    self.video_writer.write(self.resized_im)
+                    sleep_duration = max(0, self.frame_duration - (time.time() - loop_start))
+                    await asyncio.sleep(sleep_duration)
                 path = shutil.copy(filename, os.path.join(os.getcwd()))
                 log.warning(LOGGER_OBJECT_DETEECTION_ASYNC_RECORD_VIDEO,
-                            msg=f'****** Video is available on this path : {path} *******')
+                            msg=f'Recording available in {path} for the '
+                                f'next {keep_file_time} seconds')
+                try:
+                    await asyncio.sleep(keep_file_time)
+                    os.remove(path)
+                    log.warning(LOGGER_OBJECT_DETEECTION_ASYNC_RECORD_VIDEO,
+                                msg=f'Deleted {path}.')
+                except:
+                    log.error(LOGGER_OBJECT_DETEECTION_ASYNC_RECORD_VIDEO,
+                              msg=f'Error deleting {path}.')
         except:
             log.error(LOGGER_OBJECT_DETEECTION_ASYNC_RECORD_VIDEO,
                       msg=f'Error in async_record_video : '
@@ -589,7 +599,6 @@ class ObjectDetector(object):
             raise Exception(f'Error in async_record_video : '
                             f'{traceback.print_exc()}')
         finally:
-            self._is_recording = False
             self.video_writer.release()
 
     async def async_run_detection(self) -> None:

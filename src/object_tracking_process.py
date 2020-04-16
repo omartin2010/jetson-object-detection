@@ -69,11 +69,24 @@ class ObjectTrackingProcess(Process):
             tracker = OPENCV_OBJECT_TRACKERS[self.tracker_alg]()
             tracker.init(self.initial_image, self.tracked_object.get_bbox())
             logging_loops = 50
+            min_time_bw_identical_warnings = 1
             n_loops = 0
+            n_queue_errors = 0
             new_bbox = None
+            last_warning_message_time = time.time()
             while not self.exit.is_set():
                 start_time = time.time()
-                image = self.image_queue.get(block=True, timeout=2)
+                try:
+                    image = self.image_queue.get(block=True, timeout=2)
+                except queue.Empty:
+                    n_queue_errors += 1
+                    log.critical(LOGGER_OBJECT_DETECTION_PROCESS_TRACK_OPENCV_OBJECT,
+                                 msg=f'Empty image queue. Strange... Investigate')
+                    if n_queue_errors >= 5:
+                        log.critical(LOGGER_OBJECT_DETECTION_PROCESS_TRACK_OPENCV_OBJECT,
+                                     msg=f'Empty image queue for more than 5 loops : '
+                                         f'Exiting process.')
+                        self.exit.set()
                 height, width = image.shape[:2]
                 # Get new coordinates of a scored image (via TF model scoring)
                 try:
@@ -100,10 +113,13 @@ class ObjectTrackingProcess(Process):
                                 use_normalized_coordinates=False))
                         # fmt=FMT_TRACKER)
                     else:
-                        log.warning(
-                            LOGGER_OBJECT_DETECTION_PROCESS_TRACK_OPENCV_OBJECT,
-                            msg=f'openCV tracking did not find object '
-                                f'{self.tracked_object.id}. Trying to reinitialize tracker')
+                        now = time.time()
+                        if now - last_warning_message_time > min_time_bw_identical_warnings:
+                            last_warning_message_time = now
+                            log.warning(
+                                LOGGER_OBJECT_DETECTION_PROCESS_TRACK_OPENCV_OBJECT,
+                                msg=f'openCV tracking did not find object '
+                                    f'{self.tracked_object.id}. Trying to reinitialize tracker')
                         if new_bbox:
                             tracker.init(image, new_bbox.get_bbox())
                         else:
