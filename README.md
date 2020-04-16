@@ -13,7 +13,8 @@ Outstanding issues:
     - [ ] Abiltity to track N objects
     - [ ] Validate that we can remove all objects and they dissapear
     - [ ] Check that K4A still works all the time when removing objects.
-- [ ] Add ability to save video and tell it where to send it to (local storage, azure blob?)
+- [ ] Ability to record video tell it where to send it to (local storage, azure blob?)
+- [ ] Ability to save image
 
 Solved issues:
 

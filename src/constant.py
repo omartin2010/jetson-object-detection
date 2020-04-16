@@ -19,6 +19,7 @@ LOGGER_OBJECT_DETECTION_THREAD_POLL_OBJECT_TRACKING_PROCESS_QUEUE = 'obj_detecto
 LOGGER_OBJECT_DETECTION_KILL = 'obj_detector_thread_poll_kill'
 LOGGER_OBJECT_DETECTION_SOFTSHUTDOWN = 'obj_detector_soft_shutdown'
 LOGGER_OBJECT_DETECTION_UPDATE_IMG_WITH_INFO = '__update_image_with_info'
+LOGGER_OBJECT_DETEECTION_ASYNC_RECORD_VIDEO = 'obj_detector_async_record_video'
 # endregion
 
 K4A_DEFINITIONS = {

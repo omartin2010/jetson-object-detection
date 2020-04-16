@@ -1,4 +1,5 @@
 import json
+import tempfile
 import time
 import queue
 import os
@@ -10,6 +11,7 @@ import multiprocessing as mp
 import numpy as np
 import paho.mqtt.client as mqtt
 import io
+import shutil
 from PIL import Image
 import base64
 import cv2
@@ -28,7 +30,8 @@ from constant import LOGGER_OBJECT_DETECTOR_MAIN, \
     LOGGER_ASYNC_RUN_CAPTURE_LOOP, LOGGER_OBJECT_DETECTOR_SORT_TRACKED_OBJECTS, \
     LOGGER_OBJECT_DETECTION_KILL, LOGGER_OBJECT_DETECTION_OBJECT_DETECTION_POOL_MANAGER, \
     LOGGER_OBJECT_DETECTION_THREAD_POLL_OBJECT_TRACKING_PROCESS_QUEUE, \
-    LOGGER_OBJECT_DETECTION_SOFTSHUTDOWN, LOGGER_OBJECT_DETECTION_UPDATE_IMG_WITH_INFO
+    LOGGER_OBJECT_DETECTION_SOFTSHUTDOWN, LOGGER_OBJECT_DETECTION_UPDATE_IMG_WITH_INFO, \
+    LOGGER_OBJECT_DETEECTION_ASYNC_RECORD_VIDEO
 from logger import RoboLogger
 from tracked_object import BoundingBox, TrackedObjectMP, FMT_TF_BBOX
 log = RoboLogger.getLogger()
@@ -64,21 +67,26 @@ class ObjectDetector(object):
             source_calibration=CalibrationType.COLOR,
             target_calibration=CalibrationType.GYRO)
         self.category_index = self.configuration['object_classes']
+        self._fourcc = cv2.VideoWriter_fourcc(*'XVID')
         self.__fix_category_index_dict()
         self.started_threads = {}
         self._show_video = False
         self._show_depth_video = False
         if k4a_config_dict['camera_fps'] == FPS.FPS_5:
             self.frame_duration = 1. / 5
+            self.fps = 5
         elif k4a_config_dict['camera_fps'] == FPS.FPS_15:
             self.frame_duration = 1. / 15
+            self.fps = 15
         elif k4a_config_dict['camera_fps'] == FPS.FPS_30:
             self.frame_duration = 1. / 30
+            self.fps = 30
         else:
             raise Exception('Unsupported frame rate {}'.format(
                             k4a_config_dict['camera_fps']))
         self.detection_threshold = self.configuration[OBJECT_DETECTOR_CONFIG_DICT]['detection_threshold']
         self.resized_image_resolution = tuple(configuration[OBJECT_DETECTOR_CONFIG_DICT]['resized_resolution'])
+        self.display_image_resolution = tuple(configuration[OBJECT_DETECTOR_CONFIG_DICT]['display_resolution'])
         self.lock_tracked_objects_mp = threading.Lock()
         self.tracked_objects_mp = {}
         self.image_queue = PublishQueue()
@@ -87,6 +95,7 @@ class ObjectDetector(object):
         self.max_tracked_objects = self.configuration[OBJECT_DETECTOR_CONFIG_DICT]['max_tracked_objects']
         self._time_between_scoring_service_calls = self.configuration[OBJECT_DETECTOR_CONFIG_DICT]['time_between_scoring_service_calls']
         self.eventLoop = loop
+        self._is_recording = False
 
     @property
     def max_unseen_time_for_object(self):
@@ -246,7 +255,6 @@ class ObjectDetector(object):
             log.warning(LOGGER_OBJECT_DETECTOR_RUNNER,
                         msg=f'K4A device initialized...')
 
-            # region Launch Threads
             # Launch the MQTT thread listener
             log.warning(LOGGER_OBJECT_DETECTOR_RUNNER,
                         msg='Launching MQTT thread.')
@@ -282,8 +290,6 @@ class ObjectDetector(object):
                 name='objectDetectionManager')
             self.object_detection_pool_manager_thread.start()
             self.started_threads[self.object_detection_pool_manager_thread] = exit_detection_pool_manager_thread_event
-
-            # endregion
 
         except SystemExit:
             # raise the exception up the stack
@@ -427,7 +433,6 @@ class ObjectDetector(object):
                             log.warning(
                                 LOGGER_OBJECT_DETECTOR_ASYNC_PROCESS_MQTT, msg='Kill switch activated')
                             self.kill_switch()
-
                         elif currentMQTTMoveMessage.topic == 'bot/jetson/configure':
                             log.info(LOGGER_OBJECT_DETECTOR_ASYNC_PROCESS_MQTT,
                                      msg=f'Modifying configuration item...')
@@ -446,6 +451,10 @@ class ObjectDetector(object):
                         elif currentMQTTMoveMessage.topic == 'bot/logger':
                             # Changing the logging level on the fly...
                             log.setLevel(msgdict['logger'], lvl=msgdict['level'])
+                        elif currentMQTTMoveMessage.topic == 'bot/jetson/start_video':
+                            duration = float(msgdict['duration'])
+                            self.eventLoop.create_task(
+                                self.async_record_video(duration=duration))
                         else:
                             raise NotImplementedError
                     await asyncio.sleep(loopDelay)
@@ -505,17 +514,20 @@ class ObjectDetector(object):
                 # retrieve and update distance from each object
                 self.__get_distance_from_k4a()
                 # Show video in debugging mode - move to other thread (that we can start on mqtt message...)
-                if self.show_video:
+                if self.show_video or self._is_recording:
                     # Visualization of the results of a detection.
                     with self.lock_tracked_objects_mp:
                         temp_items = deepcopy(self.tracked_objects_mp)
                     img = bgra_image_color_np[:, :, :3]
                     img = self.__update_image_with_info(img, temp_items)
-                    cv2.imshow('show_video', cv2.resize(img, (1024, 576)))
-                    # bgra_image_color_np_boxes, (1024, 576)))
+                    resized_im = cv2.resize(img, self.display_image_resolution)
+                    if self.show_video:
+                        cv2.imshow('show_video', resized_im)
+                    if self._is_recording:
+                        self.video_writer.write(cv2.UMat(resized_im))
                 if self.show_depth_video:
                     cv2.imshow('show_depth_video', cv2.resize(
-                        image_depth_np, (1024, 576)))
+                        image_depth_np, self.display_image_resolution))
                 if self.show_depth_video or self.show_video:
                     if cv2.waitKey(1) & 0xFF == ord('q'):
                         cv2.destroyAllWindows()
@@ -536,6 +548,49 @@ class ObjectDetector(object):
             log.error(LOGGER_ASYNC_RUN_CAPTURE_LOOP,
                       f'Error : {traceback.print_exc()}')
             raise Exception(f'Error : {traceback.print_exc()}')
+
+    async def async_record_video(self,
+                                 duration) -> None:
+        """
+        Description : Starts the recording of a video for duration seconds
+            Will create a temporary file and send it to cloud storage
+            eventually
+        Args:
+            duration : float, represents the duration of time for which
+                to enable the recording
+        """
+        try:
+            # Create temp dir
+            with tempfile.TemporaryDirectory() as tmpdirname:
+                # Create temp file
+                filename = os.path.join(
+                    tmpdirname,
+                    next(tempfile._get_candidate_names()) + '.mp4')
+                log.warning(LOGGER_OBJECT_DETEECTION_ASYNC_RECORD_VIDEO,
+                            msg=f'Created file {filename} to store '
+                                f'video.')
+                self.video_writer = cv2.VideoWriter(
+                    filename, self._fourcc,
+                    float(self.fps), self.display_image_resolution)
+                # wait for duration seconds for recording to take place
+                log.warning(LOGGER_OBJECT_DETEECTION_ASYNC_RECORD_VIDEO,
+                            msg=f'Starting video recording now.')
+                self._is_recording = True
+                await asyncio.sleep(duration)
+                log.warning(LOGGER_OBJECT_DETEECTION_ASYNC_RECORD_VIDEO,
+                            msg=f'Stopping video recording now.')
+                path = shutil.copy(filename, os.path.join(os.getcwd()))
+                log.warning(LOGGER_OBJECT_DETEECTION_ASYNC_RECORD_VIDEO,
+                            msg=f'****** Video is available on this path : {path} *******')
+        except:
+            log.error(LOGGER_OBJECT_DETEECTION_ASYNC_RECORD_VIDEO,
+                      msg=f'Error in async_record_video : '
+                          f'{traceback.print_exc()}')
+            raise Exception(f'Error in async_record_video : '
+                            f'{traceback.print_exc()}')
+        finally:
+            self._is_recording = False
+            self.video_writer.release()
 
     async def async_run_detection(self) -> None:
         """
