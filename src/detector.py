@@ -96,62 +96,6 @@ class ObjectDetector(object):
         self._time_between_scoring_service_calls = self.configuration[OBJECT_DETECTOR_CONFIG_DICT]['time_between_scoring_service_calls']
         self.eventLoop = loop
 
-    # @property
-    # def max_unseen_time_for_object(self):
-    #     return self._max_unseen_time_for_object
-
-    # @max_unseen_time_for_object.setter
-    # def max_unseen_time_for_object(self, value):
-    #     if value < self.time_between_scoring_service_calls:
-    #         self._max_unseen_time_for_object = value
-    #     else:
-    #         log.error('PROPERTY',
-    #                   msg=f'Value for max_unseen_time_for_object needs to '
-    #                       f'be less than time_between_scoring_service_calls '
-    #                       f'({self.time_between_scoring_service_calls}). Keeping '
-    #                       f'current value of {self._max_unseen_time_for_object}')
-
-    # @property
-    # def time_between_scoring_service_calls(self):
-    #     return self._time_between_scoring_service_calls
-
-    # @time_between_scoring_service_calls.setter
-    # def time_between_scoring_service_calls(self, value):
-    #     if value > self.max_unseen_time_for_object:
-    #         self._time_between_scoring_service_calls = value
-    #     else:
-    #         log.error('PROPERTY',
-    #                   msg=f'Value for time_between_scoring_service_calls needs to '
-    #                       f'be more than max_unseen_time_for_object '
-    #                       f'({self.max_unseen_time_for_object}). Keeping '
-    #                       f'current value of {self._time_between_scoring_service_calls}')
-
-    @property
-    def show_video(self):
-        return self._show_video
-
-    @show_video.setter
-    def show_video(self, value):
-        if value is False and self._show_video:
-            cv2.destroyWindow('show_video')
-            log.warning(LOGGER_OBJECT_DETECTOR_ASYNC_PROCESS_MQTT,
-                        msg=f'Deleting display window for show_video...')
-        else:
-            self._show_video = value
-
-    @property
-    def show_depth_video(self):
-        return self._show_depth_video
-
-    @show_depth_video.setter
-    def show_depth_video(self, value):
-        if value is False and self._show_depth_video:
-            cv2.destroyWindow('show_depth_video')
-            log.warning(LOGGER_OBJECT_DETECTOR_ASYNC_PROCESS_MQTT,
-                        msg=f'Deleting display window for show_depth_video...')
-        else:
-            self._show_depth_video = value
-
     async def graceful_shutdown(self, s=None) -> None:
         """
         Description : Ensures a clean shutdown of the robot, including shutting down
@@ -207,7 +151,7 @@ class ObjectDetector(object):
             try:
                 log.warning(LOGGER_OBJECT_DETECTION_SOFTSHUTDOWN,
                             msg=f'Stopping object watchers...')
-                self.kill(all_objects=True)
+                self.kill_tracked_object(all_objects=True)
                 log.warning(LOGGER_OBJECT_DETECTION_SOFTSHUTDOWN,
                             msg=f'Object watchers stopped.')
             except:
@@ -288,7 +232,8 @@ class ObjectDetector(object):
                 args=([exit_detection_pool_manager_thread_event, 0.25]),
                 name='objectDetectionManager')
             self.object_detection_pool_manager_thread.start()
-            self.started_threads[self.object_detection_pool_manager_thread] = exit_detection_pool_manager_thread_event
+            self.started_threads[self.object_detection_pool_manager_thread] = \
+                exit_detection_pool_manager_thread_event
 
         except SystemExit:
             # raise the exception up the stack
@@ -307,9 +252,6 @@ class ObjectDetector(object):
         Main event asyncio eventloop launched in a separate thread
         """
         try:
-            # self.eventLoop = asyncio.new_event_loop()
-            # asyncio.set_event_loop(self.eventLoop)
-
             # region Create Async Tasks
             log.warning(LOGGER_OBJECT_DETECTOR_ASYNC_LOOP,
                         msg=f'Launching asyncio TASK :"process MQTT message"')
@@ -328,9 +270,6 @@ class ObjectDetector(object):
             log.warning(LOGGER_OBJECT_DETECTOR_ASYNC_LOOP,
                         msg=f'Asyncio tasks started')
 
-            # while True:
-            #     time.sleep(1)
-
         except Exception:
             log.error(LOGGER_OBJECT_DETECTOR_ASYNC_LOOP,
                       f'Error : {traceback.print_exc()}')
@@ -338,8 +277,6 @@ class ObjectDetector(object):
         finally:
             log.warning(LOGGER_OBJECT_DETECTOR_ASYNC_LOOP,
                         msg=f'Exiting event_loop_start_main_tasks')
-            # self.eventLoop.stop()
-            # self.eventLoop.close()
 
     def thread_mqtt_listener(self):
         """
@@ -767,7 +704,7 @@ class ObjectDetector(object):
                 # Call function that kills the threads/procs that need cleanup
                 nb_obj_to_delete = len({k: v for (k, v) in self._mapping_object_process_thread.items() if v['flag_for_kill']})
                 if nb_obj_to_delete > 0:
-                    self.kill()
+                    self.kill_tracked_object()
             except:
                 raise Exception(f'Problem : {traceback.print_exc()}')
             time.sleep(loop_delay)
@@ -775,8 +712,8 @@ class ObjectDetector(object):
                     msg=f'Exiting thread "thread_object_detection_pool_manager". '
                         f'Should not happen unless stopping robot.')
 
-    def kill(self,
-             all_objects=False) -> None:   # , tracked_objects):
+    def kill_tracked_object(self,
+                            all_objects=False) -> None:   # , tracked_objects):
         """
         Description:
             Function used to garbage collect (remove unused threads and
@@ -850,7 +787,8 @@ class ObjectDetector(object):
                                                   exit_thread_event: threading.Event):
         """
         Description: thread to monitor objects and retrieve updated bounding box
-            coordinates - these are calculated in the associated process.
+            coordinates - these are calculated in the associated process. Need
+            to run one per tracked object.
         Args:
             tracked_object_mp : <class TrackedObjectMP()>, object that this
                 thread is tracking the bounding box for
@@ -1119,3 +1057,29 @@ class ObjectDetector(object):
         except Exception:
             raise Exception(f'Problem with __get_distance_from_k4a : {traceback.print_exc()}')
         pass
+
+    @property
+    def show_video(self):
+        return self._show_video
+
+    @show_video.setter
+    def show_video(self, value):
+        if value is False and self._show_video:
+            cv2.destroyWindow('show_video')
+            log.warning(LOGGER_OBJECT_DETECTOR_ASYNC_PROCESS_MQTT,
+                        msg=f'Deleting display window for show_video...')
+        else:
+            self._show_video = value
+
+    @property
+    def show_depth_video(self):
+        return self._show_depth_video
+
+    @show_depth_video.setter
+    def show_depth_video(self, value):
+        if value is False and self._show_depth_video:
+            cv2.destroyWindow('show_depth_video')
+            log.warning(LOGGER_OBJECT_DETECTOR_ASYNC_PROCESS_MQTT,
+                        msg=f'Deleting display window for show_depth_video...')
+        else:
+            self._show_depth_video = value

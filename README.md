@@ -14,9 +14,11 @@ Outstanding issues:
     - [ ] Validate that we can remove all objects and they dissapear
     - [ ] Check that K4A still works all the time when removing objects.
 - [X] Ability to record video 
-    - [ ] Save to temp file
+    - [ ] Save to temp file : upload to blob in proper structure (/date/...)
     - [ ] Send it to cloud destination (local storage, azure blob, OneDrive)
-- [ ] Ability to save image
+    - [ ] Use logic app to send to onedrive
+- [ ] Ability to save image : 
+- [ ] Move 
 
 Solved issues:
 

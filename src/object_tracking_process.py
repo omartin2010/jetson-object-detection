@@ -16,10 +16,9 @@ log = RoboLogger.getLogger()
 class ObjectTrackingProcess(Process):
     """
     Description:
-        Class runs a process in the executorProcessPool to keep track of
-            an object using opencv's trackers.
+        Class runs a process in per tracked object. This is required to offload
+            main CPU from the open CV work. 
     """
-
     def __init__(self,
                  tracked_object: TrackedObjectMP,
                  tracker_alg: str,
@@ -30,7 +29,7 @@ class ObjectTrackingProcess(Process):
                  tracking_object_queue: mp.Queue):
         """
         Description:
-            Constructor for the class
+            Constructor for the class.
         Args:
             tracked_object: <class 'TrackedObjectMP()'>, object tracked by process
             tracker_alg : string, one of the values in OPENCV_OBJECT_TRACKERS
