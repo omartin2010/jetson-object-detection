@@ -5,8 +5,17 @@ A subsent of a project to do object detection (toy detection really) on a jetson
 Insert IMAGE 1 - class = similar to lego blocks <br>
 Insert IMAGE 2 - class = Rubik Cube <br>
 
+Outstanding issues:
 
-Issues to deal with soon:
+- [ ] Tracking Stability :
+    - [ ] Find a way to remove dangling processes (maybe garbage collecting some unused queues...???)
+    - [ ] Need to debug processes when there are 4-5 objects... seems to get confused.
+    - [ ] Abiltity to track N objects
+    - [ ] Validate that we can remove all objects and they dissapear
+    - [ ] Check that K4A still works all the time when removing objects.
+- [ ] Add ability to save video and tell it where to send it to (local storage, azure blob?)
+
+Solved issues:
 
 - [X] ~~MQTT~~
 - [X] ~~Async event loop~~
@@ -19,17 +28,9 @@ Issues to deal with soon:
 - [X] ~~Add that the objects that are kept monitored are ordered by scores... so if max_item = 1, we don't keep score = 60% if one has score = 80%~~
 - [X] Need to understand why it's tracking more than 1 object when we tell it not to.
 - [X] ~~Remove Tensorflow (remove-tensorflow branch) : ~~
-    - [X] ~~almost done! - need to add actual class name to object and get rid of the self.category thing...~~
 - [X] ~~Run development from container (vscode-remote-container)~~
 - [X] ~~Figure out distance to object... and propagate it.~~
 - [X] ~~Updating not only tracking position but score as the TF scoring varies~~
-- [ ] Tracking Stability :
-    - [ ] Find a way to remove dangling processes (maybe garbage collecting some unused queues...???)
-    - [ ] Need to debug processes when there are 4-5 objects... seems to get confused.
-    - [ ] Abiltity to track N objects
-    - [ ] Validate that we can remove all objects and they dissapear
-    - [ ] Check that K4A still works all the time when removing objects.
-- [ ] Add ability to save video and tell it where to send it to (local storage, azure blob?)
 - [X] CPU usage :
 
 | Nb Objects    |   Cpu Usage (from docker stats)   |
