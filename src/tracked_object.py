@@ -242,8 +242,8 @@ class TrackedObjectMP(object):
         overlap_area = max(0, float(overlap_x) * float(overlap_y))
         return overlap_area
 
-    def update_bounding_box(self,
-                            bbox: BoundingBox):
+    def set_bbox(self,
+                 bbox: BoundingBox):
         # fmt='tracker'):
         """
         Description : exposes bounding box member 'update' to track

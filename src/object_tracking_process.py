@@ -17,7 +17,7 @@ class ObjectTrackingProcess(Process):
     """
     Description:
         Class runs a process in per tracked object. This is required to offload
-            main CPU from the open CV work. 
+            main CPU from the open CV work.
     """
     def __init__(self,
                  tracked_object: TrackedObjectMP,
@@ -93,7 +93,7 @@ class ObjectTrackingProcess(Process):
                     tracker = None
                     tracker = OPENCV_OBJECT_TRACKERS[self.tracker_alg]()
                     tracker.init(image, new_bbox.get_bbox())
-                    self.tracked_object.update_bounding_box(new_bbox)
+                    self.tracked_object.set_bbox(new_bbox)
                     self.tracked_object.score = new_score
                     self.tracked_object.object_class = new_class
                     log.warning(LOGGER_OBJECT_DETECTION_PROCESS_TRACK_OPENCV_OBJECT,
@@ -103,7 +103,7 @@ class ObjectTrackingProcess(Process):
                     # Costly operation - update opencv tracker information
                     (success, bbox) = tracker.update(image)
                     if success:
-                        self.tracked_object.update_bounding_box(
+                        self.tracked_object.set_bbox(
                             BoundingBox(
                                 box=bbox,
                                 image_height=height,

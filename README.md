@@ -18,7 +18,7 @@ Outstanding issues:
     - [ ] Send it to cloud destination (local storage, azure blob, OneDrive)
     - [ ] Use logic app to send to onedrive
 - [ ] Ability to save image : 
-- [ ] Move 
+- [ ] Move video display to its own task
 
 Solved issues:
 
