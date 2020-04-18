@@ -164,6 +164,10 @@ class TrackedObjectMP(object):
     passed to the multiprocessing task without the opencv2 object
     because it can't be pickled.
     """
+    UNDETECTED = 'undetected_with_tf'
+    UNSEEN = 'unseen_for_some_time'
+    UNSTABLE = 'process_or_thread_stopped'
+
     def __init__(self,
                  object_class: int,
                  score: float,
