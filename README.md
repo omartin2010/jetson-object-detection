@@ -18,6 +18,7 @@ Outstanding issues:
 - [ ] Ability to save image (for future trainings):
     - [ ] Save to temp file
     - [ ] Upload to blob
+- [ ] Add a system watchdog to monitor threads and processes and shutdown if important threads are failing... (like video capture)
 - [ ] Move video display to its own task
 - [ ] Improve model - take more pictures
 - [ ] Modify the mqtt processing for setting logging level so that dict can be:</br>
@@ -26,6 +27,15 @@ Outstanding issues:
     'logger_id': level,
     'logger_id_2': level
 }
+```
+- [ ] Fix this error when quitting application</br>
+```
+2020-04-20 11:13:33.720:PID1:WARNING:MainThread:obj_detector_proc_mqtt:Cancelled the MQTT dequeing task.
+Traceback (most recent call last):
+  File "src/detector.py", line 552, in async_display_video
+    await asyncio.sleep(sleep_time)
+  File "/usr/lib/python3.6/asyncio/tasks.py", line 482, in sleep
+    return (yield from future)
 ```
 
 

@@ -511,31 +511,29 @@ class ObjectDetector(object):
             prev_show_depth_video = False
             while True:
                 start_time = time.time()
-                if self.show_video and not prev_show_video:
-                    log.debug(LOGGER_OBJECT_DETECTION_ASYNC_DISPLAY_VIDEO,
-                              msg=f'IN SHOW_VIDEO 1...')
-                    cv2.imshow('show_video', self.resized_im)
-                    log.debug(LOGGER_OBJECT_DETECTION_ASYNC_DISPLAY_VIDEO,
-                              msg=f'IN SHOW_VIDEO 2...')
-                    prev_show_video = True
                 if not self.show_video and prev_show_video:
                     log.debug(LOGGER_OBJECT_DETECTION_ASYNC_DISPLAY_VIDEO,
                               msg=f'IN SHOW_VIDEO - DESTROY_VIDEO')
                     cv2.destroyWindow('show_video')
                     prev_show_video = False
-
-                if self.show_depth_video and not prev_show_depth_video:
+                if self.show_video:
                     log.debug(LOGGER_OBJECT_DETECTION_ASYNC_DISPLAY_VIDEO,
-                              msg=f'IN SHOW_DEPTH_VIDEO...')
-                    resized_depth_im = cv2.resize(
-                        self.image_depth_np, self.display_image_resolution)
-                    cv2.imshow('show_depth_video', resized_depth_im)
-                    prev_show_depth_video = True
+                              msg=f'showing: show_video... shape of image is: {self.resized_im.shape}')
+                    cv2.imshow('show_video', self.resized_im)
+                    prev_show_video = True
+
                 if not self.show_depth_video and prev_show_depth_video:
                     log.debug(LOGGER_OBJECT_DETECTION_ASYNC_DISPLAY_VIDEO,
                               msg=f'IN SHOW_DEPTH_VIDEO - DESTROY_VIDEO')
                     cv2.destroyWindow('show_depth_video')
                     prev_show_depth_video = False
+                if self.show_depth_video:
+                    log.debug(LOGGER_OBJECT_DETECTION_ASYNC_DISPLAY_VIDEO,
+                              msg=f'showing: show_depth_video...')
+                    resized_depth_im = cv2.resize(
+                        self.image_depth_np, self.display_image_resolution)
+                    cv2.imshow('show_depth_video', resized_depth_im)
+                    prev_show_depth_video = True
 
                 # if self.show_depth_video or self.show_video:
                 #     if cv2.waitKey(1) & 0xFF == ord('q'):
@@ -550,10 +548,13 @@ class ObjectDetector(object):
                 log.debug(LOGGER_OBJECT_DETECTION_ASYNC_DISPLAY_VIDEO,
                           msg=f'sleep_time = {sleep_time:.4f}s - show_video = {self.show_video}, prev_show_video = {prev_show_video}')
                 await asyncio.sleep(sleep_time)
+        except asyncio.futures.CancelledError:
+            log.warning(LOGGER_OBJECT_DETECTION_ASYNC_DISPLAY_VIDEO,
+                        msg=f'Cancelled the display video task.')
         except Exception:
             log.error(LOGGER_OBJECT_DETECTION_ASYNC_DISPLAY_VIDEO,
-                        msg=f'Problem in async_display_video : '
-                            f'{traceback.print_exc()}')
+                      msg=f'Problem in async_display_video : '
+                          f'{traceback.print_exc()}')
 
     async def async_record_video(self,
                                  duration) -> None:
