@@ -31,7 +31,8 @@ from constant import LOGGER_OBJECT_DETECTOR_MAIN, \
     LOGGER_OBJECT_DETECTION_KILL, LOGGER_OBJECT_DETECTION_OBJECT_DETECTION_POOL_MANAGER, \
     LOGGER_OBJECT_DETECTION_THREAD_POLL_OBJECT_TRACKING_PROCESS_QUEUE, \
     LOGGER_OBJECT_DETECTION_SOFTSHUTDOWN, LOGGER_OBJECT_DETECTION_UPDATE_IMG_WITH_INFO, \
-    LOGGER_OBJECT_DETECTION_ASYNC_RECORD_VIDEO, LOGGER_OBJECT_DETECTION_GET_DISTANCE_FROM_K4A
+    LOGGER_OBJECT_DETECTION_ASYNC_RECORD_VIDEO, LOGGER_OBJECT_DETECTION_GET_DISTANCE_FROM_K4A, \
+    LOGGER_OBJECT_DETECTION_ASYNC_DISPLAY_VIDEO
 from logger import RoboLogger
 from tracked_object import BoundingBox, TrackedObjectMP, \
     FMT_TF_BBOX, UNDETECTED, UNSEEN, UNSTABLE
@@ -73,8 +74,8 @@ class ObjectDetector(object):
         self._fourcc = cv2.VideoWriter_fourcc(*'XVID')
         self.__fix_category_index_dict()
         self.started_threads = {}
-        self._show_video = False
-        self._show_depth_video = False
+        self.show_video = False
+        self.show_depth_video = False
         if k4a_config_dict['camera_fps'] == FPS.FPS_5:
             self.frame_duration = 1. / 5
             self.fps = 5
@@ -284,6 +285,12 @@ class ObjectDetector(object):
             self.async_run_detection_task = \
                 self.eventLoop.create_task(
                     self.async_run_detection())
+
+            log.warning(LOGGER_OBJECT_DETECTOR_ASYNC_LOOP,
+                        msg=f'Launching video display TASK : "async_display_video"')
+            self.async_display_video_task = \
+                self.eventLoop.create_task(
+                    self.async_display_video())
             # endregion
 
             # self.eventLoop.run_forever()
@@ -390,20 +397,20 @@ class ObjectDetector(object):
                                 LOGGER_OBJECT_DETECTOR_ASYNC_PROCESS_MQTT, msg='Kill switch activated')
                             self.kill_switch()
                         elif currentMQTTMoveMessage.topic == 'bot/jetson/configure':
-                            log.info(LOGGER_OBJECT_DETECTOR_ASYNC_PROCESS_MQTT,
-                                     msg=f'Modifying configuration item...')
+                            log.warning(LOGGER_OBJECT_DETECTOR_ASYNC_PROCESS_MQTT,
+                                        msg=f'Modifying configuration item...')
                             for k, v in msgdict.items():
                                 if k in dir(self):
-                                    log.warning(LOGGER_OBJECT_DETECTOR_ASYNC_PROCESS_MQTT,
-                                                msg=f'Setting attribute self.{k} to value {v}')
+                                    log.debug(LOGGER_OBJECT_DETECTOR_ASYNC_PROCESS_MQTT,
+                                              msg=f'Setting attribute self.{k} to value {v}')
                                     # Adding / changing configuration parameters for the object
                                     self.__setattr__(k, v)
-                                    log.warning(LOGGER_OBJECT_DETECTOR_ASYNC_PROCESS_MQTT,
-                                                msg=f'After validation, attribute self.{k} '
-                                                    f'= value {self.__getattribute__(k)}')
+                                    log.info(LOGGER_OBJECT_DETECTOR_ASYNC_PROCESS_MQTT,
+                                             msg=f'After validation, attribute self.{k} '
+                                                 f'= value {self.__getattribute__(k)}')
                                 else:
-                                    log.warning(LOGGER_OBJECT_DETECTOR_ASYNC_PROCESS_MQTT,
-                                                msg=f'Attribute self.{k} not found. Will not add it.')
+                                    log.critical(LOGGER_OBJECT_DETECTOR_ASYNC_PROCESS_MQTT,
+                                                 msg=f'Attribute self.{k} not found. Will not add it.')
                         elif currentMQTTMoveMessage.topic == 'bot/logger':
                             # Changing the logging level on the fly...
                             log.setLevel(msgdict['logger'], lvl=msgdict['level'])
@@ -448,7 +455,7 @@ class ObjectDetector(object):
                 start_time = time.time()
                 # Read frame from camera
                 try:
-                    bgra_image_color_np, image_depth_np = \
+                    bgra_image_color_np, self.image_depth_np = \
                         self.k4a_device.get_capture(
                             color_only=False,
                             transform_depth_to_color=True)
@@ -460,7 +467,7 @@ class ObjectDetector(object):
                         self.resized_image_resolution))
                 self.image_queue.publish(self.rgb_image_color_np_resized)
                 self.image_depth_np_resized = np.asarray(
-                    Image.fromarray(image_depth_np).resize(
+                    Image.fromarray(self.image_depth_np).resize(
                         self.resized_image_resolution,
                         resample=Image.NEAREST))
                 # only do this after the first loop is done
@@ -474,18 +481,6 @@ class ObjectDetector(object):
                 with self.lock_tracked_objects_mp:
                     img = self.__update_image_with_info(img)
                 self.resized_im = cv2.resize(img, self.display_image_resolution)
-                # Show video in debugging mode - move to other thread (that we can start on mqtt message...)
-                if self.show_video:
-                    cv2.imshow('show_video', self.resized_im)
-                if self.show_depth_video:
-                    resized_depth_im = cv2.resize(
-                        image_depth_np, self.display_image_resolution)
-                    cv2.imshow('show_depth_video', resized_depth_im)
-                if self.show_depth_video or self.show_video:
-                    if cv2.waitKey(1) & 0xFF == ord('q'):
-                        cv2.destroyAllWindows()
-                        self.show_video = False
-                        self.show_depth_video = False
                 duration = time.time() - start_time
                 average_duration += duration
                 n_loops += 1
@@ -501,6 +496,64 @@ class ObjectDetector(object):
             log.error(LOGGER_ASYNC_RUN_CAPTURE_LOOP,
                       f'Error : {traceback.print_exc()}')
             raise Exception(f'Error : {traceback.print_exc()}')
+
+    async def async_display_video(self) -> None:
+        """
+        Description:
+            Task to display video - used primarily for debugging purposes,
+                when there is a screen connected to the device.
+        """
+        try:
+            log.warning(LOGGER_OBJECT_DETECTION_ASYNC_DISPLAY_VIDEO,
+                        msg=f'Launching display video background '
+                            f'task.')
+            prev_show_video = False
+            prev_show_depth_video = False
+            while True:
+                start_time = time.time()
+                if self.show_video and not prev_show_video:
+                    log.debug(LOGGER_OBJECT_DETECTION_ASYNC_DISPLAY_VIDEO,
+                              msg=f'IN SHOW_VIDEO 1...')
+                    cv2.imshow('show_video', self.resized_im)
+                    log.debug(LOGGER_OBJECT_DETECTION_ASYNC_DISPLAY_VIDEO,
+                              msg=f'IN SHOW_VIDEO 2...')
+                    prev_show_video = True
+                if not self.show_video and prev_show_video:
+                    log.debug(LOGGER_OBJECT_DETECTION_ASYNC_DISPLAY_VIDEO,
+                              msg=f'IN SHOW_VIDEO - DESTROY_VIDEO')
+                    cv2.destroyWindow('show_video')
+                    prev_show_video = False
+
+                if self.show_depth_video and not prev_show_depth_video:
+                    log.debug(LOGGER_OBJECT_DETECTION_ASYNC_DISPLAY_VIDEO,
+                              msg=f'IN SHOW_DEPTH_VIDEO...')
+                    resized_depth_im = cv2.resize(
+                        self.image_depth_np, self.display_image_resolution)
+                    cv2.imshow('show_depth_video', resized_depth_im)
+                    prev_show_depth_video = True
+                if not self.show_depth_video and prev_show_depth_video:
+                    log.debug(LOGGER_OBJECT_DETECTION_ASYNC_DISPLAY_VIDEO,
+                              msg=f'IN SHOW_DEPTH_VIDEO - DESTROY_VIDEO')
+                    cv2.destroyWindow('show_depth_video')
+                    prev_show_depth_video = False
+
+                # if self.show_depth_video or self.show_video:
+                #     if cv2.waitKey(1) & 0xFF == ord('q'):
+                #         cv2.destroyAllWindows()
+                #         self.show_video = False
+                #         self.show_depth_video = False
+                #         break
+                duration = time.time() - start_time
+                # prev_show_video = self.show_video
+                # prev_show_depth_video = self.show_depth_video
+                sleep_time = max(0, self.frame_duration - duration)
+                log.debug(LOGGER_OBJECT_DETECTION_ASYNC_DISPLAY_VIDEO,
+                          msg=f'sleep_time = {sleep_time:.4f}s - show_video = {self.show_video}, prev_show_video = {prev_show_video}')
+                await asyncio.sleep(sleep_time)
+        except Exception:
+            log.error(LOGGER_OBJECT_DETECTION_ASYNC_DISPLAY_VIDEO,
+                        msg=f'Problem in async_display_video : '
+                            f'{traceback.print_exc()}')
 
     async def async_record_video(self,
                                  duration) -> None:
@@ -1145,28 +1198,28 @@ class ObjectDetector(object):
         except Exception:
             raise Exception(f'Problem with __get_distance_from_k4a : {traceback.print_exc()}')
 
-    @property
-    def show_video(self):
-        return self._show_video
+    # @property
+    # def show_video(self):
+    #     return self._show_video
 
-    @show_video.setter
-    def show_video(self, value):
-        if value is False and self._show_video:
-            cv2.destroyWindow('show_video')
-            log.warning(LOGGER_OBJECT_DETECTOR_ASYNC_PROCESS_MQTT,
-                        msg=f'Deleting display window for show_video...')
-        else:
-            self._show_video = value
+    # @show_video.setter
+    # def show_video(self, value):
+    #     if value is False and self._show_video:
+    #         cv2.destroyWindow('show_video')
+    #         log.warning(LOGGER_OBJECT_DETECTOR_ASYNC_PROCESS_MQTT,
+    #                     msg=f'Deleting display window for show_video...')
+    #     else:
+    #         self._show_video = value
 
-    @property
-    def show_depth_video(self):
-        return self._show_depth_video
+    # @property
+    # def show_depth_video(self):
+    #     return self._show_depth_video
 
-    @show_depth_video.setter
-    def show_depth_video(self, value):
-        if value is False and self._show_depth_video:
-            cv2.destroyWindow('show_depth_video')
-            log.warning(LOGGER_OBJECT_DETECTOR_ASYNC_PROCESS_MQTT,
-                        msg=f'Deleting display window for show_depth_video...')
-        else:
-            self._show_depth_video = value
+    # @show_depth_video.setter
+    # def show_depth_video(self, value):
+    #     if value is False and self._show_depth_video:
+    #         cv2.destroyWindow('show_depth_video')
+    #         log.warning(LOGGER_OBJECT_DETECTOR_ASYNC_PROCESS_MQTT,
+    #                     msg=f'Deleting display window for show_depth_video...')
+    #     else:
+    #         self._show_depth_video = value
