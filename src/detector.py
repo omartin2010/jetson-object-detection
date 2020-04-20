@@ -459,8 +459,12 @@ class ObjectDetector(object):
                         self.k4a_device.get_capture(
                             color_only=False,
                             transform_depth_to_color=True)
-                except K4AException:
+                except K4AException as err:
                     k4a_errors += 1         # count problematic frame capture
+                    log.critical(LOGGER_ASYNC_RUN_CAPTURE_LOOP,
+                                 msg=f'Error count: {k4a_errors} - '
+                                     f'traceback = {traceback.print_exc()} '
+                                     f'Err = {err}')
                 self.rgb_image_color_np = bgra_image_color_np[:, :, :3][..., ::-1]
                 self.rgb_image_color_np_resized = np.asarray(
                     Image.fromarray(self.rgb_image_color_np).resize(
@@ -480,7 +484,8 @@ class ObjectDetector(object):
                 img = bgra_image_color_np[:, :, :3]
                 with self.lock_tracked_objects_mp:
                     img = self.__update_image_with_info(img)
-                self.resized_im = cv2.resize(img, self.display_image_resolution)
+                resized_im = cv2.resize(img, self.display_image_resolution)
+                # self.resized_im_for_video = resized_im.copy()
                 duration = time.time() - start_time
                 average_duration += duration
                 n_loops += 1
@@ -511,29 +516,30 @@ class ObjectDetector(object):
             prev_show_depth_video = False
             while True:
                 start_time = time.time()
+                if self.show_video:
+                    log.debug(LOGGER_OBJECT_DETECTION_ASYNC_DISPLAY_VIDEO,
+                              msg=f'showing: show_video... shape of image is: {self.resized_im_for_video.shape}')
+                    cv2.imshow('show_video', self.resized_im_for_video)
+                    prev_show_video = True
                 if not self.show_video and prev_show_video:
                     log.debug(LOGGER_OBJECT_DETECTION_ASYNC_DISPLAY_VIDEO,
                               msg=f'IN SHOW_VIDEO - DESTROY_VIDEO')
                     cv2.destroyWindow('show_video')
                     prev_show_video = False
-                if self.show_video:
-                    log.debug(LOGGER_OBJECT_DETECTION_ASYNC_DISPLAY_VIDEO,
-                              msg=f'showing: show_video... shape of image is: {self.resized_im.shape}')
-                    cv2.imshow('show_video', self.resized_im)
-                    prev_show_video = True
 
-                if not self.show_depth_video and prev_show_depth_video:
-                    log.debug(LOGGER_OBJECT_DETECTION_ASYNC_DISPLAY_VIDEO,
-                              msg=f'IN SHOW_DEPTH_VIDEO - DESTROY_VIDEO')
-                    cv2.destroyWindow('show_depth_video')
-                    prev_show_depth_video = False
                 if self.show_depth_video:
                     log.debug(LOGGER_OBJECT_DETECTION_ASYNC_DISPLAY_VIDEO,
                               msg=f'showing: show_depth_video...')
                     resized_depth_im = cv2.resize(
                         self.image_depth_np, self.display_image_resolution)
                     cv2.imshow('show_depth_video', resized_depth_im)
+                    del self.image_depth_np
                     prev_show_depth_video = True
+                if not self.show_depth_video and prev_show_depth_video:
+                    log.debug(LOGGER_OBJECT_DETECTION_ASYNC_DISPLAY_VIDEO,
+                              msg=f'IN SHOW_DEPTH_VIDEO - DESTROY_VIDEO')
+                    cv2.destroyWindow('show_depth_video')
+                    prev_show_depth_video = False
 
                 # if self.show_depth_video or self.show_video:
                 #     if cv2.waitKey(1) & 0xFF == ord('q'):
@@ -587,7 +593,7 @@ class ObjectDetector(object):
                             msg=f'Recording video to {filename} now.')
                 while time.time() - start_time < duration:
                     loop_start = time.time()
-                    self.video_writer.write(self.resized_im)
+                    self.video_writer.write(self.resized_im_for_video)
                     sleep_duration = max(0, self.frame_duration - (time.time() - loop_start))
                     await asyncio.sleep(sleep_duration)
                 path = shutil.copy(filename, os.path.join(os.getcwd()))
