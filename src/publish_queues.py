@@ -1,6 +1,10 @@
 import os
 import multiprocessing as mp
 from functools import wraps
+from logger import RoboLogger
+from constant import LOGGER_OBJECT_DETECTION_PUBLISH_QUEUES_UNREGISTER, \
+    LOGGER_OBJECT_DETECTION_PUBLISH_QUEUES_REGISTER
+log = RoboLogger.getLogger()
 
 
 def ensure_parent(func):
@@ -31,13 +35,16 @@ class PublishQueue(object):
     def register(self, name):
         with self.lock:
             q = mp.Manager().Queue()
-            # self._queues.append(q)
+            log.warning(LOGGER_OBJECT_DETECTION_PUBLISH_QUEUES_REGISTER,
+                        msg=f'Registering {name[:8]} to queues')
             self._queues[name] = q
             return q
 
     @ensure_parent
     def unregister(self, name):
         with self.lock:
+            log.warning(LOGGER_OBJECT_DETECTION_PUBLISH_QUEUES_UNREGISTER,
+                        msg=f'Unregistering {name[:8]} from queues')
             self._queues.pop(name)
 
     @ensure_parent

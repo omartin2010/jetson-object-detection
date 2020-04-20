@@ -1,24 +1,26 @@
-# jetson_object_detection
+# NVIDIA Jetson Object Detection
 Object Detection on Jetson TX2
-A subsent of a project to do object detection (toy detection really) on a jetson TX2 Lego Robot. For example, here are samples of the two classes of objects the model included in this repo can detect :<br>
+A subset of a project to do object detection (toy detection really) on a Jetson TX2 powered Lego Robot. For example, here are samples of the two classes of objects the model included in this repo can detect :<br>
 <br>
-Insert IMAGE 1 - class = similar to lego blocks <br>
+Insert IMAGE 1 - class = Similar to lego blocks <br>
 Insert IMAGE 2 - class = Rubik Cube <br>
+
+See [here](https://www.youtube.com/watch?v=w8ZtLOhuymo) for an actual example of a video recording of what it's doing. The idea is that this piece of software is to provide a robot the coordinates so that the robot can actually pick up and move these objects around.
 
 Outstanding issues:
 
 - [ ] Tracking Stability :
     - [ ] Find a way to remove dangling processes (maybe garbage collecting some unused queues...???)
-    - [ ] Need to debug processes when there are 4-5 objects... seems to get confused.
-    - [ ] Abiltity to track N objects
-    - [ ] Validate that we can remove all objects and they dissapear
-    - [ ] Check that K4A still works all the time when removing objects.
-- [X] Ability to record video 
-    - [ ] Save to temp file : upload to blob in proper structure (/date/...)
-    - [ ] Send it to cloud destination (local storage, azure blob, OneDrive)
-    - [ ] Use logic app to send to onedrive
-- [ ] Ability to save image : 
+- [X] Ability to record video:
+    - [X] ~~Save to temp file~~
+    - [ ] Upload to blob in proper structure (/date/...)
+    - [ ] Use logic app to send to onedrive if need be
+- [ ] Ability to save image (for future trainings):
+    - [ ] Save to temp file
+    - [ ] Upload to blob
 - [ ] Move video display to its own task
+- [ ] Improve model - take more pictures
+
 
 Solved issues:
 
@@ -36,6 +38,27 @@ Solved issues:
 - [X] ~~Run development from container (vscode-remote-container)~~
 - [X] ~~Figure out distance to object... and propagate it.~~
 - [X] ~~Updating not only tracking position but score as the TF scoring varies~~
+- [X] Stability : 
+    - [X] Distance can't be computed... need to understand why.
+    - [X] ~~Need to debug processes when there are 4-5 objects... seems to get confused.~~
+    - [X] ~~Abiltity to track N objects~~
+    - [X] ~~Validate that we can remove all objects and they dissapear~~
+    - [X] ~~Check that K4A still works all the time when removing objects.~~
+    - [X] ~~Fix traceback on exit: ~~
+                    ```Traceback (most recent call last):</br>
+                File "src/detector.py", line 818, in </br>
+                remove_tracked_objects</br>
+                    self.image_queue.unregister(name=str(obj_id))</br>
+                File "src/publish_queues.py", line 12, in inner</br>
+                    return func(self, *args, **kwargs)</br>
+                File "src/publish_queues.py", line 41, in unregister</br>
+                    self._queues.pop(name)</br>
+KeyError: 'e7506c84-f9ab-44dc-9999-8018e76f7fd9'</br>```</br>
+            ~~that happens when exiting the process.~~
+- [X] ~~Investigate Distance issue resetting at every loop:~~
+    - [x] ~~Try finding why it comes back to -12 (or constructor's value)~~
+    - [X] ~~seems to be recreating a new object at every loop - check other threads... we may well be doing that~~
+    - [X] ~~Problem with sometimes bounding box coordinates being negative from object_tracking_processes.py (assert issue)~~
 - [X] CPU usage :
 
 | Nb Objects    |   Cpu Usage (from docker stats)   |

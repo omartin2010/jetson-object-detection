@@ -66,8 +66,8 @@ class ObjectTrackingProcess(Process):
                         f'{self.tracked_object.id}')
             exitcode = 0
             tracker = OPENCV_OBJECT_TRACKERS[self.tracker_alg]()
-            tracker.init(self.initial_image, self.tracked_object.get_bbox())
-            logging_loops = 50
+            _ = tracker.init(self.initial_image, self.tracked_object.get_bbox())
+            logging_loops = 100
             min_time_bw_identical_warnings = 1
             n_loops = 0
             n_queue_errors = 0
@@ -89,6 +89,9 @@ class ObjectTrackingProcess(Process):
                 height, width = image.shape[:2]
                 # Get new coordinates of a scored image (via TF model scoring)
                 try:
+                    new_bbox = None
+                    new_score = None
+                    new_class = None
                     new_bbox, new_score, new_class = self.new_tf_info_queue.get_nowait()
                     tracker = None
                     tracker = OPENCV_OBJECT_TRACKERS[self.tracker_alg]()
@@ -99,6 +102,7 @@ class ObjectTrackingProcess(Process):
                     log.warning(LOGGER_OBJECT_DETECTION_PROCESS_TRACK_OPENCV_OBJECT,
                                 msg=f'Getting new position from tensorflow for '
                                     f'object {self.tracked_object.id}')
+                # If no TF scoring, queue is Empty ==> use tracker to find position
                 except queue.Empty:
                     # Costly operation - update opencv tracker information
                     (success, bbox) = tracker.update(image)
@@ -111,30 +115,30 @@ class ObjectTrackingProcess(Process):
                                 fmt=FMT_TRACKER,
                                 use_normalized_coordinates=False))
                         # fmt=FMT_TRACKER)
-                    else:
+                    elif new_bbox:
                         now = time.time()
                         if now - last_warning_message_time > min_time_bw_identical_warnings:
                             last_warning_message_time = now
                             log.warning(
                                 LOGGER_OBJECT_DETECTION_PROCESS_TRACK_OPENCV_OBJECT,
-                                msg=f'openCV tracking did not find object '
-                                    f'{self.tracked_object.id}. Trying to reinitialize tracker')
-                        if new_bbox:
-                            tracker.init(image, new_bbox.get_bbox())
-                        else:
-                            tracker.init(image, self.tracked_object.get_bbox())
+                                msg=f'Trying to reinitialize tracker for object '
+                                    f'{self.tracked_object.id} with last bounding box info.')
+                        tracker = None
+                        tracker = OPENCV_OBJECT_TRACKERS[self.tracker_alg]()
+                        tracker.init(image, new_bbox.get_bbox())
                 except Exception:
                     raise Exception(f'Problem : {traceback.print_exc()}')
                 # Dumping tracked_object to queue - unless exit flag unset
                 if not self.exit.is_set():
+                    # put box, score and class not to overried other metadata held in other process
                     self.tracking_object_queue.put(self.tracked_object, block=True, timeout=2)
                 # Sleep if required
                 loop_duration = time.time() - start_time
                 time.sleep(max(0, self.frame_duration - loop_duration))
                 if n_loops % logging_loops == 0:
-                    log.warning(
+                    log.debug(
                         LOGGER_OBJECT_DETECTION_PROCESS_TRACK_OPENCV_OBJECT,
-                        msg=f'Process stil tracking {self.tracked_object.id} '
+                        msg=f'Process still tracking {self.tracked_object.id} '
                             f'after {n_loops} loops - object class = '
                             f'{self.tracked_object.object_class}.')
                 n_loops += 1

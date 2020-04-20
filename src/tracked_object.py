@@ -1,8 +1,9 @@
 import uuid
 import time
 import numpy as np
-# from PIL import Image
-# from constant import OPENCV_OBJECT_TRACKERS
+from logger import RoboLogger
+from constant import LOGGER_OBJECT_DETECTION_TRACKED_OBJECT_PROPERTY_UPDATE
+log = RoboLogger.getLogger()
 
 FMT_TRACKER = 'tracker'
 """
@@ -24,6 +25,10 @@ FMT_STANDARD = 'std'
 Origin is top left
 Coordinates for box is (x_min, y_min, x_max, y_max)
 """
+
+UNDETECTED = 'undetected_with_tf'
+UNSEEN = 'unseen_for_some_time'
+UNSTABLE = 'process_or_thread_stopped'
 
 
 class BoundingBox(object):
@@ -164,9 +169,6 @@ class TrackedObjectMP(object):
     passed to the multiprocessing task without the opencv2 object
     because it can't be pickled.
     """
-    UNDETECTED = 'undetected_with_tf'
-    UNSEEN = 'unseen_for_some_time'
-    UNSTABLE = 'process_or_thread_stopped'
 
     def __init__(self,
                  object_class: int,
@@ -195,8 +197,11 @@ class TrackedObjectMP(object):
         self.id = uuid.uuid4()
         self.object_class = object_class
         self.last_seen = time.time()
+        # Indicates whether the object is currently in the mapped dict of
+        # tracked objects. At creation this is false.
+        self.monitored = False
         self.score = score
-        self.distance = distance
+        self._distance = distance
         self.coords_3d_coordinates_center_point = None
         self._original_image_resolution = original_image_resolution
         height, width = self._original_image_resolution
@@ -206,6 +211,30 @@ class TrackedObjectMP(object):
             image_width=width,
             fmt=fmt,
             use_normalized_coordinates=use_normalized_coordinates)
+
+    @property
+    def monitored(self):
+        return self._monitored
+
+    @monitored.setter
+    def monitored(self, value):
+        self._monitored = True
+        self.last_seen = time.time()
+
+    @property
+    def distance(self):
+        return self._distance
+
+    @distance.setter
+    def distance(self, value):
+        try:
+            float_value = float(value)
+            if isinstance(float_value, float):
+                assert value >= 0, 'Problem, distance < 0!'
+                self._distance = float_value
+        except Exception:
+            log.warning(LOGGER_OBJECT_DETECTION_TRACKED_OBJECT_PROPERTY_UPDATE,
+                        msg=f'Issue with setting distance to wrong value.')
 
     def get_max_overlap_bb(self,
                            list_bb: [BoundingBox]):
@@ -248,13 +277,11 @@ class TrackedObjectMP(object):
 
     def set_bbox(self,
                  bbox: BoundingBox):
-        # fmt='tracker'):
         """
         Description : exposes bounding box member 'update' to track
             update its coordinates while tracking last_seen time
         Args:
             bbox: BoundingBox representing the new bounding box
-            # fmt: string, one of FMT_TRACKER, FMT_BBOX, FMT_STANDARD
         """
         fmt = FMT_TRACKER
         self.last_seen = time.time()
@@ -264,6 +291,16 @@ class TrackedObjectMP(object):
                 use_normalized_coordinates=False),
             fmt=fmt)
 
+    def get_bbox_object(self):
+        """
+        Description:
+            Returns the BoundingBox object of the current object tracker
+        Args : 
+            None
+        Returns : <Class BoundingBox> object
+        """
+        return self._bounding_box
+
     def get_bbox(self,
                  fmt='tracker',
                  use_normalized_coordinates=False):
@@ -272,6 +309,8 @@ class TrackedObjectMP(object):
             exposes bounding box member to retrieve the bounding box
         Args:
             fmt: string, one of FMT_TRACKER, FMT_BBOX, FMT_STANDARD
+        Returns:
+
         """
         return self._bounding_box.get_bbox(
             fmt=fmt,
