@@ -485,7 +485,7 @@ class ObjectDetector(object):
                 with self.lock_tracked_objects_mp:
                     img = self.__update_image_with_info(img)
                 resized_im = cv2.resize(img, self.display_image_resolution)
-                # self.resized_im_for_video = resized_im.copy()
+                self.resized_im_for_video = resized_im.copy()
                 duration = time.time() - start_time
                 average_duration += duration
                 n_loops += 1
@@ -520,6 +520,7 @@ class ObjectDetector(object):
                     log.debug(LOGGER_OBJECT_DETECTION_ASYNC_DISPLAY_VIDEO,
                               msg=f'showing: show_video... shape of image is: {self.resized_im_for_video.shape}')
                     cv2.imshow('show_video', self.resized_im_for_video)
+                    cv2.waitKey(1)
                     prev_show_video = True
                 if not self.show_video and prev_show_video:
                     log.debug(LOGGER_OBJECT_DETECTION_ASYNC_DISPLAY_VIDEO,
@@ -533,23 +534,14 @@ class ObjectDetector(object):
                     resized_depth_im = cv2.resize(
                         self.image_depth_np, self.display_image_resolution)
                     cv2.imshow('show_depth_video', resized_depth_im)
-                    del self.image_depth_np
+                    cv2.waitKey(1)
                     prev_show_depth_video = True
                 if not self.show_depth_video and prev_show_depth_video:
                     log.debug(LOGGER_OBJECT_DETECTION_ASYNC_DISPLAY_VIDEO,
                               msg=f'IN SHOW_DEPTH_VIDEO - DESTROY_VIDEO')
                     cv2.destroyWindow('show_depth_video')
                     prev_show_depth_video = False
-
-                # if self.show_depth_video or self.show_video:
-                #     if cv2.waitKey(1) & 0xFF == ord('q'):
-                #         cv2.destroyAllWindows()
-                #         self.show_video = False
-                #         self.show_depth_video = False
-                #         break
                 duration = time.time() - start_time
-                # prev_show_video = self.show_video
-                # prev_show_depth_video = self.show_depth_video
                 sleep_time = max(0, self.frame_duration - duration)
                 log.debug(LOGGER_OBJECT_DETECTION_ASYNC_DISPLAY_VIDEO,
                           msg=f'sleep_time = {sleep_time:.4f}s - show_video = {self.show_video}, prev_show_video = {prev_show_video}')
