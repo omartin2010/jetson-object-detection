@@ -452,8 +452,12 @@ class ObjectDetector(object):
                         self.k4a_device.get_capture(
                             color_only=False,
                             transform_depth_to_color=True)
-                except K4AException:
+                except K4AException as err:
                     k4a_errors += 1         # count problematic frame capture
+                    log.critical(LOGGER_ASYNC_RUN_CAPTURE_LOOP,
+                                 msg=f'Error count: {k4a_errors} - '
+                                     f'traceback = {traceback.print_exc()} '
+                                     f'Err = {err}')
                 self.rgb_image_color_np = bgra_image_color_np[:, :, :3][..., ::-1]
                 self.rgb_image_color_np_resized = np.asarray(
                     Image.fromarray(self.rgb_image_color_np).resize(
@@ -473,19 +477,8 @@ class ObjectDetector(object):
                 img = bgra_image_color_np[:, :, :3]
                 with self.lock_tracked_objects_mp:
                     img = self.__update_image_with_info(img)
-                self.resized_im = cv2.resize(img, self.display_image_resolution)
-                # Show video in debugging mode - move to other thread (that we can start on mqtt message...)
-                if self.show_video:
-                    cv2.imshow('show_video', self.resized_im)
-                if self.show_depth_video:
-                    resized_depth_im = cv2.resize(
-                        image_depth_np, self.display_image_resolution)
-                    cv2.imshow('show_depth_video', resized_depth_im)
-                if self.show_depth_video or self.show_video:
-                    if cv2.waitKey(1) & 0xFF == ord('q'):
-                        cv2.destroyAllWindows()
-                        self.show_video = False
-                        self.show_depth_video = False
+                resized_im = cv2.resize(img, self.display_image_resolution)
+                self.resized_im_for_video = resized_im.copy()
                 duration = time.time() - start_time
                 average_duration += duration
                 n_loops += 1
@@ -501,6 +494,58 @@ class ObjectDetector(object):
             log.error(LOGGER_ASYNC_RUN_CAPTURE_LOOP,
                       f'Error : {traceback.print_exc()}')
             raise Exception(f'Error : {traceback.print_exc()}')
+
+    async def async_display_video(self) -> None:
+        """
+        Description:
+            Task to display video - used primarily for debugging purposes,
+                when there is a screen connected to the device.
+        """
+        try:
+            log.warning(LOGGER_OBJECT_DETECTION_ASYNC_DISPLAY_VIDEO,
+                        msg=f'Launching display video background '
+                            f'task.')
+            prev_show_video = False
+            prev_show_depth_video = False
+            while True:
+                start_time = time.time()
+                if self.show_video:
+                    log.debug(LOGGER_OBJECT_DETECTION_ASYNC_DISPLAY_VIDEO,
+                              msg=f'showing: show_video... shape of image is: {self.resized_im_for_video.shape}')
+                    cv2.imshow('show_video', self.resized_im_for_video)
+                    cv2.waitKey(1)
+                    prev_show_video = True
+                if not self.show_video and prev_show_video:
+                    log.debug(LOGGER_OBJECT_DETECTION_ASYNC_DISPLAY_VIDEO,
+                              msg=f'IN SHOW_VIDEO - DESTROY_VIDEO')
+                    cv2.destroyWindow('show_video')
+                    prev_show_video = False
+
+                if self.show_depth_video:
+                    log.debug(LOGGER_OBJECT_DETECTION_ASYNC_DISPLAY_VIDEO,
+                              msg=f'showing: show_depth_video...')
+                    resized_depth_im = cv2.resize(
+                        self.image_depth_np, self.display_image_resolution)
+                    cv2.imshow('show_depth_video', resized_depth_im)
+                    cv2.waitKey(1)
+                    prev_show_depth_video = True
+                if not self.show_depth_video and prev_show_depth_video:
+                    log.debug(LOGGER_OBJECT_DETECTION_ASYNC_DISPLAY_VIDEO,
+                              msg=f'IN SHOW_DEPTH_VIDEO - DESTROY_VIDEO')
+                    cv2.destroyWindow('show_depth_video')
+                    prev_show_depth_video = False
+                duration = time.time() - start_time
+                sleep_time = max(0, self.frame_duration - duration)
+                log.debug(LOGGER_OBJECT_DETECTION_ASYNC_DISPLAY_VIDEO,
+                          msg=f'sleep_time = {sleep_time:.4f}s - show_video = {self.show_video}, prev_show_video = {prev_show_video}')
+                await asyncio.sleep(sleep_time)
+        except asyncio.futures.CancelledError:
+            log.warning(LOGGER_OBJECT_DETECTION_ASYNC_DISPLAY_VIDEO,
+                        msg=f'Cancelled the display video task.')
+        except Exception:
+            log.error(LOGGER_OBJECT_DETECTION_ASYNC_DISPLAY_VIDEO,
+                      msg=f'Problem in async_display_video : '
+                          f'{traceback.print_exc()}')
 
     async def async_record_video(self,
                                  duration) -> None:
@@ -533,7 +578,7 @@ class ObjectDetector(object):
                             msg=f'Recording video to {filename} now.')
                 while time.time() - start_time < duration:
                     loop_start = time.time()
-                    self.video_writer.write(self.resized_im)
+                    self.video_writer.write(self.resized_im_for_video)
                     sleep_duration = max(0, self.frame_duration - (time.time() - loop_start))
                     await asyncio.sleep(sleep_duration)
                 path = shutil.copy(filename, os.path.join(os.getcwd()))
