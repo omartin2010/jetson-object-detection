@@ -20,13 +20,6 @@ Outstanding issues:
     - [ ] Upload to blob
 - [ ] Move video display to its own task
 - [ ] Improve model - take more pictures
-- [ ] Modify the mqtt processing for setting logging level so that dict can be:</br>
-```
-{
-    'logger_id': level,
-    'logger_id_2': level
-}
-```
 
 
 Solved issues:

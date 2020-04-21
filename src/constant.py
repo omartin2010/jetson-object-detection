@@ -24,7 +24,6 @@ LOGGER_OBJECT_DETECTION_TRACKED_OBJECT_PROPERTY_UPDATE = 'obj_detector_tracked_o
 LOGGER_OBJECT_DETECTION_GET_DISTANCE_FROM_K4A = 'obj_detector__get_distance_from_k4a'
 LOGGER_OBJECT_DETECTION_PUBLISH_QUEUES_UNREGISTER = 'obj_detector_publish_queue_unregister'
 LOGGER_OBJECT_DETECTION_PUBLISH_QUEUES_REGISTER = 'obj_detector_publish_queue_register'
-LOGGER_OBJECT_DETECTION_ASYNC_DISPLAY_VIDEO = 'obj_detector_async_display_video'
 # endregion
 
 K4A_DEFINITIONS = {
