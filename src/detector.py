@@ -1196,29 +1196,3 @@ class ObjectDetector(object):
                     obj.coords_3d_coordinates_center_point = None
         except Exception:
             raise Exception(f'Problem with __get_distance_from_k4a : {traceback.print_exc()}')
-
-    # @property
-    # def show_video(self):
-    #     return self._show_video
-
-    # @show_video.setter
-    # def show_video(self, value):
-    #     if value is False and self._show_video:
-    #         cv2.destroyWindow('show_video')
-    #         log.warning(LOGGER_OBJECT_DETECTOR_ASYNC_PROCESS_MQTT,
-    #                     msg=f'Deleting display window for show_video...')
-    #     else:
-    #         self._show_video = value
-
-    # @property
-    # def show_depth_video(self):
-    #     return self._show_depth_video
-
-    # @show_depth_video.setter
-    # def show_depth_video(self, value):
-    #     if value is False and self._show_depth_video:
-    #         cv2.destroyWindow('show_depth_video')
-    #         log.warning(LOGGER_OBJECT_DETECTOR_ASYNC_PROCESS_MQTT,
-    #                     msg=f'Deleting display window for show_depth_video...')
-    #     else:
-    #         self._show_depth_video = value
