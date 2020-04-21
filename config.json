@@ -6,7 +6,8 @@
         "subscribedTopics":["bot/jetson/configure",
                             "bot/jetson/start_video",
                             "bot/killSwitch",
-                            "bot/logger"],
+                            "bot/logger",
+                            "bot/logger/multiple"],
         "publishingTopics":["client/moveBaseFeedback",
                             "client/moveEndEffectorFeedback",
                             "client/ErrorHandling"]

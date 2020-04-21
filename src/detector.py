@@ -414,6 +414,10 @@ class ObjectDetector(object):
                         elif currentMQTTMoveMessage.topic == 'bot/logger':
                             # Changing the logging level on the fly...
                             log.setLevel(msgdict['logger'], lvl=msgdict['level'])
+                        elif currentMQTTMoveMessage.topic == 'bot/logger/multiple':
+                            # Changing the logging level on the fly for multiple loggers at a time
+                            for logger, level in msgdict.items():
+                                log.setLevel(logger, level)
                         elif currentMQTTMoveMessage.topic == 'bot/jetson/start_video':
                             duration = float(msgdict['duration'])
                             self.eventLoop.create_task(
