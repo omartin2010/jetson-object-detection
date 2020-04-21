@@ -407,7 +407,7 @@ class ObjectDetector(object):
                                     self.__setattr__(k, v)
                                     log.warning(LOGGER_OBJECT_DETECTOR_ASYNC_PROCESS_MQTT,
                                                 msg=f'After validation, attribute self.{k} '
-                                                    f'= value {self.__getattribute__(k)}')
+                                                    f'= "{self.__getattribute__(k)}"')
                                 else:
                                     log.error(LOGGER_OBJECT_DETECTOR_ASYNC_PROCESS_MQTT,
                                               msg=f'Attribute self.{k} not found. Will not add it.')
