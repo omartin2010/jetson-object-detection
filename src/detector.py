@@ -31,7 +31,8 @@ from constant import LOGGER_OBJECT_DETECTOR_MAIN, \
     LOGGER_OBJECT_DETECTION_KILL, LOGGER_OBJECT_DETECTION_OBJECT_DETECTION_POOL_MANAGER, \
     LOGGER_OBJECT_DETECTION_THREAD_POLL_OBJECT_TRACKING_PROCESS_QUEUE, \
     LOGGER_OBJECT_DETECTION_SOFTSHUTDOWN, LOGGER_OBJECT_DETECTION_UPDATE_IMG_WITH_INFO, \
-    LOGGER_OBJECT_DETECTION_ASYNC_RECORD_VIDEO, LOGGER_OBJECT_DETECTION_GET_DISTANCE_FROM_K4A
+    LOGGER_OBJECT_DETECTION_ASYNC_RECORD_VIDEO, LOGGER_OBJECT_DETECTION_GET_DISTANCE_FROM_K4A, \
+    LOGGER_OBJECT_DETECTION_ASYNC_DISPLAY_VIDEO
 from logger import RoboLogger
 from tracked_object import BoundingBox, TrackedObjectMP, \
     FMT_TF_BBOX, UNDETECTED, UNSEEN, UNSTABLE
@@ -73,8 +74,8 @@ class ObjectDetector(object):
         self._fourcc = cv2.VideoWriter_fourcc(*'XVID')
         self.__fix_category_index_dict()
         self.started_threads = {}
-        self._show_video = False
-        self._show_depth_video = False
+        self.show_video = False
+        self.show_depth_video = False
         if k4a_config_dict['camera_fps'] == FPS.FPS_5:
             self.frame_duration = 1. / 5
             self.fps = 5
@@ -284,6 +285,12 @@ class ObjectDetector(object):
             self.async_run_detection_task = \
                 self.eventLoop.create_task(
                     self.async_run_detection())
+
+            log.warning(LOGGER_OBJECT_DETECTOR_ASYNC_LOOP,
+                        msg=f'Launching asyncio TASK : "async_display_video"')
+            self.async_run_detection_task = \
+                self.eventLoop.create_task(
+                    self.async_display_video())
             # endregion
 
             # self.eventLoop.run_forever()
@@ -394,16 +401,16 @@ class ObjectDetector(object):
                                      msg=f'Modifying configuration item...')
                             for k, v in msgdict.items():
                                 if k in dir(self):
-                                    log.warning(LOGGER_OBJECT_DETECTOR_ASYNC_PROCESS_MQTT,
-                                                msg=f'Setting attribute self.{k} to value {v}')
+                                    log.info(LOGGER_OBJECT_DETECTOR_ASYNC_PROCESS_MQTT,
+                                             msg=f'Setting attribute self.{k} to value {v}')
                                     # Adding / changing configuration parameters for the object
                                     self.__setattr__(k, v)
                                     log.warning(LOGGER_OBJECT_DETECTOR_ASYNC_PROCESS_MQTT,
                                                 msg=f'After validation, attribute self.{k} '
                                                     f'= value {self.__getattribute__(k)}')
                                 else:
-                                    log.warning(LOGGER_OBJECT_DETECTOR_ASYNC_PROCESS_MQTT,
-                                                msg=f'Attribute self.{k} not found. Will not add it.')
+                                    log.error(LOGGER_OBJECT_DETECTOR_ASYNC_PROCESS_MQTT,
+                                              msg=f'Attribute self.{k} not found. Will not add it.')
                         elif currentMQTTMoveMessage.topic == 'bot/logger':
                             # Changing the logging level on the fly...
                             log.setLevel(msgdict['logger'], lvl=msgdict['level'])
@@ -479,6 +486,7 @@ class ObjectDetector(object):
                     img = self.__update_image_with_info(img)
                 resized_im = cv2.resize(img, self.display_image_resolution)
                 self.resized_im_for_video = resized_im.copy()
+                self.image_depth_np = image_depth_np.copy()
                 duration = time.time() - start_time
                 average_duration += duration
                 n_loops += 1
@@ -552,7 +560,7 @@ class ObjectDetector(object):
         """
         Description : Starts the recording of a video for duration seconds
             Will create a temporary file and send it to cloud storage
-            eventually
+            eventually.
         Args:
             duration : float, represents the duration of time for which
                 to enable the recording
