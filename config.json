@@ -5,6 +5,7 @@
         "brokerProto" : "tcp",
         "subscribedTopics":["bot/jetson/configure",
                             "bot/jetson/start_video",
+                            "bot/jetson/snap_picture",
                             "bot/killSwitch",
                             "bot/logger",
                             "bot/logger/multiple"],
