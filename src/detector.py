@@ -61,7 +61,7 @@ class ObjectDetector(object):
         self.mqtt_message_queue = queue.Queue()
         self.exception_queue = queue.Queue()        # PROBABLY NOT NEEDED
         self.ready_queue = queue.Queue()   # used to signal that there's an image ready for processing
-        self.object_detection_result_queue = queue.Queue(maxsize=1)
+        self.object_detection_result_queue = queue.Queue(maxsize=5)   # 5 allows for debugging...
         # self.detection_result = {}
         k4a_config_dict = self.configuration[OBJECT_DETECTOR_CONFIG_DICT]['k4a_device']
         self.k4a_config = k4aConf(
@@ -514,8 +514,6 @@ class ObjectDetector(object):
                     average_duration /= 50
                     log.debug(LOGGER_ASYNC_RUN_CAPTURE_LOOP,
                               msg=f'Ran 50 in {duration_50:.2f}s - {average_duration:.2f}s/loop or {1/average_duration:.2f} loop/sec')
-                    log.debug(LOGGER_ASYNC_RUN_CAPTURE_LOOP,
-                              msg=f'Currently monitoring {len(self.tracked_objects_mp)} objects')
                     average_duration = 0
         except Exception:
             log.error(LOGGER_ASYNC_RUN_CAPTURE_LOOP,
@@ -771,14 +769,18 @@ class ObjectDetector(object):
                 payload = {'image': base64_encoded_image.decode('ascii')}
                 start_time = time.time()
                 async with ClientSession() as session:
-                    async with session.post(url=model_url, data=json.dumps(payload), headers=headers) as response:
+                    async with session.post(
+                            url=model_url,
+                            data=json.dumps(payload),
+                            headers=headers) as response:
                         end_time = time.time()
                         if response.status == 200:
                             body = await response.json()
                             log.debug(LOGGER_ASYNC_RUN_DETECTION,
                                       msg=f'Got model response... iteration {n_loops}')
                             task_start_time = time.time()
-                            # Post results to queue to be consumed by thread_object_detection_pool_manager
+                            # Post results to queue to be consumed by
+                            # thread_object_detection_pool_manager
                             try:
                                 self.ready_for_first_detection_event.set()
                                 self.object_detection_result_queue.put(
@@ -930,9 +932,11 @@ class ObjectDetector(object):
                     with self.lock_tracked_objects_mp:
                         for obj in objs_to_remove_from_dict:
                             self.tracked_objects_mp.pop(obj)
+                time.sleep(loop_delay)
+                log.info(LOGGER_OBJECT_DETECTION_OBJECT_DETECTION_POOL_MANAGER,
+                         msg=f'Currently monitoring {len(self.tracked_objects_mp)} objects')
             except:
                 raise Exception(f'Problem : {traceback.print_exc()}')
-            time.sleep(loop_delay)
         log.critical(LOGGER_OBJECT_DETECTION_OBJECT_DETECTION_POOL_MANAGER,
                      msg=f'Exiting thread "thread_object_detection_pool_manager". '
                          f'Should not happen unless stopping robot.')
@@ -1095,14 +1099,12 @@ class ObjectDetector(object):
 
     def __update_image_with_info(self,
                                  img,
-                                 # temp_items,
                                  alpha=0.5):
         """
         Description: updates images with information to display on the video
             if shown
         Args:
             img : numpy array containing original image to display
-            # temp_items : contains a dictionnary of items to display
             alpha : float, overlay transparency =defaults to 0.5
         Returns:
             modified image
@@ -1192,9 +1194,6 @@ class ObjectDetector(object):
             self.ready_for_first_detection_event.set()
             detection_boxes, detection_scores, detection_classes = \
                 self.object_detection_result_queue.get_nowait()
-            # detection_boxes = self.detection_result['boxes']
-            # detection_scores = self.detection_result['scores']
-            # detection_classes = self.detection_result['classes']
             # Find #boxes with score > thresh or max tracked objects
             nb_bb = min(
                 self.max_tracked_objects,
@@ -1265,9 +1264,6 @@ class ObjectDetector(object):
             # List objects that were created as warnings
             new_objects_ids = set(new_tracked_objects_mp).difference(
                 set(self.tracked_objects_mp))
-            # for obj in list(new_objects_ids):
-            #     log.warning(LOGGER_OBJECT_DETECTOR_SORT_TRACKED_OBJECTS,
-            #                 msg=f'Created tracker for object {obj}')
             new_objects = {
                 k: v for k, v in new_tracked_objects_mp.items()
                 if k in new_objects_ids}
