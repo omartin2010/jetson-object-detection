@@ -127,8 +127,9 @@ RUN pip3 install jupyter matplotlib image
 
 RUN pip3 uninstall -y enum34 
 RUN pip3 install jupyterlab flake8 git+https://github.com/microsoft/debugpy.git paho-mqtt aiohttp 
-RUN pip3 install git+https://github.com/etiennedub/pyk4a.git@develop
 RUN apt install -y libcanberra-gtk-module libcanberra-gtk3-module
+RUN pip3 install git+https://github.com/etiennedub/pyk4a.git@develop
+RUN pip3 install azure-storage-blob==12.3.0 azure-identity
 
 WORKDIR /app
 # COPY src/utils /app/utils/
