@@ -76,7 +76,7 @@ class ObjectDetector(object):
             source_calibration=CalibrationType.COLOR,
             target_calibration=CalibrationType.GYRO)
         self.category_index = self.configuration['object_classes']
-        self._fourcc = cv2.VideoWriter_fourcc(*'XVID')
+        self._fourcc = cv2.VideoWriter_fourcc(*'MJPG')
         self.__video_file_extension = '.avi'
         self.__video_content_type = 'video/x-msvideo'
         self.__fix_category_index_dict()
@@ -330,7 +330,9 @@ class ObjectDetector(object):
                 self.mqtt_topics)
             if mqtt_connect_result == mqtt.MQTT_ERR_SUCCESS:
                 log.warning(LOGGER_OBJECT_DETECTOR_MQTT_LOOP,
-                            msg=f'Successfully subscribed to {self.mqtt_topics}')
+                            msg=f'Successfully subscribed to topics in input config file')
+                log.debug(LOGGER_OBJECT_DETECTOR_MQTT_LOOP,
+                          msg=f'Topics subcribed = {self.mqtt_topics}')
             else:
                 log.error(LOGGER_OBJECT_DETECTOR_MQTT_LOOP,
                           'MQTT Broker subscription problem.')
@@ -591,20 +593,25 @@ class ObjectDetector(object):
                 log.warning(LOGGER_OBJECT_DETECTION_ASYNC_RECORD_VIDEO,
                             msg=f'Created file {filename} to store video. '
                                 f'Res = {self.display_image_resolution}')
-                self.video_writer = cv2.VideoWriter(
-                    filename, self._fourcc,
-                    float(self.fps), self.display_image_resolution)
-                # wait for duration seconds for recording to take place
-                log.warning(LOGGER_OBJECT_DETECTION_ASYNC_RECORD_VIDEO,
-                            msg=f'Recording video to {filename} now.')
-                while time.time() - start_time < duration:
-                    loop_start = time.time()
-                    self.video_writer.write(self.resized_im_for_video)
-                    sleep_duration = max(0, self.frame_duration - (time.time() - loop_start))
-                    await asyncio.sleep(sleep_duration)
+                try:
+                    video_writer = cv2.VideoWriter(
+                        filename, self._fourcc,
+                        float(self.fps), self.display_image_resolution)
+                    # wait for duration seconds for recording to take place
+                    log.warning(LOGGER_OBJECT_DETECTION_ASYNC_RECORD_VIDEO,
+                                msg=f'Recording video to {filename} now.')
+                    while time.time() - start_time < duration:
+                        loop_start = time.time()
+                        video_writer.write(self.resized_im_for_video)
+                        sleep_duration = max(0, self.frame_duration - (time.time() - loop_start))
+                        await asyncio.sleep(sleep_duration)
+                except Exception:
+                    raise Exception()
+                finally:
+                    video_writer.release()
+                    log.debug(LOGGER_OBJECT_DETECTION_ASYNC_RECORD_VIDEO,
+                              msg=f'Recording completed, released video writer.')
                 path = shutil.copy(filename, os.path.join(os.getcwd()))
-                log.info(LOGGER_OBJECT_DETECTION_ASYNC_RECORD_VIDEO,
-                         msg=f'Recording completed.')
                 try:
                     await self.async_upload_file_to_azure(
                         container_name=self.__video_cloud_container,
@@ -634,8 +641,6 @@ class ObjectDetector(object):
                           f'{traceback.print_exc()}')
             raise Exception(f'Error in async_record_video : '
                             f'{traceback.print_exc()}')
-        finally:
-            self.video_writer.release()
 
     async def async_upload_file_to_azure(self,
                                          container_name: str,
@@ -671,10 +676,12 @@ class ObjectDetector(object):
                                          f'is set to {container_client}'
                 log.debug(
                     LOGGER_OBJECT_DETECTION_ASYNC_UPLOAD_FILE_TO_AZURE,
-                    msg=f'Container client created = {container_client}.'
-                        f'About to await creation of container '
-                        f'{container_name}.')
+                    msg=f'Container client created = {container_client}.')
                 try:
+                    log.debug(
+                        LOGGER_OBJECT_DETECTION_ASYNC_UPLOAD_FILE_TO_AZURE,
+                        msg=f'About to await creation of container '
+                            f'{container_name}.')
                     await container_client.create_container(metadata=metadata)
                 except ResourceExistsError:
                     log.info(

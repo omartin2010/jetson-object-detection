@@ -16,17 +16,17 @@ Outstanding issues:
     - [ ] Upload to blob
 - [ ] Add a system watchdog to monitor threads and processes and shutdown if important threads are failing... (like video capture)
 - [ ] Improve model - take more pictures
-- [ ] Troubleshoot why video file format from XVID/AVI container won't read in browser - files generated in devcontainer work... but not in application... 
 - [ ] Move cloud uploader to other class...?
 
 Solved issues:
 
-- [X] Ability to record video:
+- [X] ~~Troubleshoot why video file format from XVID/AVI container won't read in browser - files generated in devcontainer work... but not in application...~~
+- [X] ~~Ability to record video:~~
     - [X] ~~Save to temp file~~
-    - [X] Upload to blob in proper structure (/date/...)
-    - [X] Use logic app to send to onedrive if need be
-- [X] Move video display to its own task
-- [X] Modify the mqtt processing for setting logging level so that dict can be:</br>
+    - [X] ~~Upload to blob in proper structure (/date/...)~~
+    - [X] ~~Use logic app to send to onedrive if need be~~
+- [X] ~~Move video display to its own task~~
+- [X] ~~Modify the mqtt processing for setting logging level so that dict can be:~~</br>
 ```
 {
     'logger_id': level,
