@@ -10,3 +10,4 @@ launch.json
 tasks.json
 **/*.png
 *.vsix
+*.avi

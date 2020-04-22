@@ -274,6 +274,7 @@ class ObjectDetector(object):
         except K4AException:
             log.error(LOGGER_OBJECT_DETECTOR_RUNNER,
                       f'Error with K4A : {traceback.print_exc()}')
+            raise K4AException(f'Issue with K4A - Need to stop.')
 
         except Exception:
             log.error(LOGGER_OBJECT_DETECTOR_RUNNER,
@@ -481,6 +482,8 @@ class ObjectDetector(object):
                                  msg=f'Error count: {k4a_errors} - '
                                      f'traceback = {traceback.print_exc()} '
                                      f'Err = {err}')
+                    if k4a_errors > 5:
+                        raise K4AException('Too many errors. Quitting.')
                 self.rgb_image_color_np = bgra_image_color_np[:, :, :3][..., ::-1]
                 self.rgb_image_color_np_resized = np.asarray(
                     Image.fromarray(self.rgb_image_color_np).resize(
