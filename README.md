@@ -16,8 +16,8 @@ Outstanding issues:
     - [ ] Upload to blob
 - [ ] Add a system watchdog to monitor threads and processes and shutdown if important threads are failing... (like video capture)
 - [ ] Improve model - take more pictures
-- [ ] Change video file format from AVI XVID to something else so that OneDrive can read it the browser...
-
+- [ ] Troubleshoot why video file format from XVID/AVI container won't read in browser - files generated in devcontainer work... but not in application... 
+- [ ] Move cloud uploader to other class...?
 
 Solved issues:
 

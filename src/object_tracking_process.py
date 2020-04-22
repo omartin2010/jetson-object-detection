@@ -99,9 +99,9 @@ class ObjectTrackingProcess(Process):
                     self.tracked_object.set_bbox(new_bbox)
                     self.tracked_object.score = new_score
                     self.tracked_object.object_class = new_class
-                    log.warning(LOGGER_OBJECT_DETECTION_PROCESS_TRACK_OPENCV_OBJECT,
-                                msg=f'Obtianed new bbox from tensorflow '
-                                    f'(object id = {str(self.tracked_object.id)[:8]})')
+                    log.info(LOGGER_OBJECT_DETECTION_PROCESS_TRACK_OPENCV_OBJECT,
+                             msg=f'Obtained new bbox from tensorflow '
+                                 f'(object id = {str(self.tracked_object.id)[:8]})')
                 # If no TF scoring, queue is Empty ==> use tracker to find position
                 except queue.Empty:
                     # Costly operation - update opencv tracker information

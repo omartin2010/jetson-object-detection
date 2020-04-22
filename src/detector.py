@@ -16,6 +16,7 @@ import shutil
 from PIL import Image
 import base64
 from azure.storage.blob.aio import BlobServiceClient
+from azure.storage.blob import ContentSettings
 from azure.core.exceptions import ResourceExistsError
 from azure.identity.aio import EnvironmentCredential
 import cv2
@@ -76,6 +77,8 @@ class ObjectDetector(object):
             target_calibration=CalibrationType.GYRO)
         self.category_index = self.configuration['object_classes']
         self._fourcc = cv2.VideoWriter_fourcc(*'XVID')
+        self.__video_file_extension = '.avi'
+        self.__video_content_type = 'video/x-msvideo'
         self.__fix_category_index_dict()
         self.started_threads = {}
         self.show_video = False
@@ -584,11 +587,10 @@ class ObjectDetector(object):
                 # Create temp file
                 filename = os.path.join(
                     tmpdirname,
-                    next(tempfile._get_candidate_names()) + '.avi')
+                    next(tempfile._get_candidate_names()) + self.__video_file_extension)
                 log.warning(LOGGER_OBJECT_DETECTION_ASYNC_RECORD_VIDEO,
                             msg=f'Created file {filename} to store video. '
-                                f'Recording resolution = display resolution = '
-                                f'{self.display_image_resolution}')
+                                f'Res = {self.display_image_resolution}')
                 self.video_writer = cv2.VideoWriter(
                     filename, self._fourcc,
                     float(self.fps), self.display_image_resolution)
@@ -601,17 +603,24 @@ class ObjectDetector(object):
                     sleep_duration = max(0, self.frame_duration - (time.time() - loop_start))
                     await asyncio.sleep(sleep_duration)
                 path = shutil.copy(filename, os.path.join(os.getcwd()))
+                log.info(LOGGER_OBJECT_DETECTION_ASYNC_RECORD_VIDEO,
+                         msg=f'Recording completed.')
                 try:
                     await self.async_upload_file_to_azure(
                         container_name=self.__video_cloud_container,
-                        local_blob_path=filename)
+                        local_blob_path=filename,
+                        content_type=self.__video_content_type)
                     log.warning(LOGGER_OBJECT_DETECTION_ASYNC_RECORD_VIDEO,
                                 msg=f'Recording locally available in {path} '
                                     f'for {keep_file_time} seconds')
                     await asyncio.sleep(keep_file_time)
                     os.remove(path)
+                    log.info(LOGGER_OBJECT_DETECTION_ASYNC_RECORD_VIDEO,
+                             msg=f'Deleted {path}.')
+                except asyncio.futures.CancelledError:
                     log.warning(LOGGER_OBJECT_DETECTION_ASYNC_RECORD_VIDEO,
-                                msg=f'Deleted {path}.')
+                                msg=f'Cancelled the video recording at pause time.')
+                    raise asyncio.futures.CancelledError()
                 except:
                     log.error(LOGGER_OBJECT_DETECTION_ASYNC_RECORD_VIDEO,
                               msg=f'Uncaught Exception. Details = '
@@ -630,13 +639,15 @@ class ObjectDetector(object):
 
     async def async_upload_file_to_azure(self,
                                          container_name: str,
-                                         local_blob_path: str) -> None:
+                                         local_blob_path: str,
+                                         content_type: str) -> None:
         """
         Description :
             Sends file to cloud. Files could be video, or photos, or others
         Args:
             container_name : str, container name to be created in Azure
             local_blob_path : str, absolute path of object to be uploaded
+            content_type: str, mimetype, of file being uploaded, video/x-msvideo
         Returns :
             Sucess or None if failed.
         """
@@ -666,7 +677,7 @@ class ObjectDetector(object):
                 try:
                     await container_client.create_container(metadata=metadata)
                 except ResourceExistsError:
-                    log.warning(
+                    log.info(
                         LOGGER_OBJECT_DETECTION_ASYNC_UPLOAD_FILE_TO_AZURE,
                         msg=f'Blob container {container_name} already '
                             f'exists on storage account '
@@ -674,7 +685,8 @@ class ObjectDetector(object):
                 except Exception:
                     log.error(
                         LOGGER_OBJECT_DETECTION_ASYNC_UPLOAD_FILE_TO_AZURE,
-                        msg=f'Error creating blob {traceback.print_exc()}')
+                        msg=f'Error creating blob container : '
+                            f'{traceback.print_exc()}')
                 else:
                     log.warning(
                         LOGGER_OBJECT_DETECTION_ASYNC_UPLOAD_FILE_TO_AZURE,
@@ -684,21 +696,28 @@ class ObjectDetector(object):
                     datetime.datetime.now().strftime("%Y/%m/%d/%H"),
                     filename)
                 blob_client = container_client.get_blob_client(target_filename)
-                log.info(LOGGER_OBJECT_DETECTION_ASYNC_UPLOAD_FILE_TO_AZURE,
-                         msg=f'Uploading blob {local_blob_path} in container '
-                             f'{container_name} with target blob name = '
-                             f'{target_filename}')
+                log.warning(LOGGER_OBJECT_DETECTION_ASYNC_UPLOAD_FILE_TO_AZURE,
+                            msg=f'Uploading local file {local_blob_path} to '
+                                f'blob {target_filename} in container '
+                                f'{container_name}.')
                 try:
+                    metadata = {
+                        'create_time': datetime.datetime.now().strftime(
+                            "%Y-%m-%d %H:%M:%S.%f"),
+                        'type': 'video_file'
+                    }
                     with open(local_blob_path, 'rb') as data:
                         await blob_client.upload_blob(
                             data,
                             blob_type='BlockBlob',
-                            metadata=metadata)
+                            metadata=metadata,
+                            content_settings=ContentSettings(
+                                content_type=content_type))
                 except Exception:
                     log.error(LOGGER_OBJECT_DETECTION_ASYNC_UPLOAD_FILE_TO_AZURE,
                               msg=f'Error uploading blob {traceback.print_exc()}')
                 log.warning(LOGGER_OBJECT_DETECTION_ASYNC_UPLOAD_FILE_TO_AZURE,
-                            msg=f'Upload completed. Done')
+                            msg=f'Upload completed.')
         except asyncio.futures.CancelledError:
             log.warning(LOGGER_OBJECT_DETECTION_ASYNC_UPLOAD_FILE_TO_AZURE,
                         msg=f'Cancelled the video uploading task.')

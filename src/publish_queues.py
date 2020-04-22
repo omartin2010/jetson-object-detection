@@ -35,16 +35,16 @@ class PublishQueue(object):
     def register(self, name):
         with self.lock:
             q = mp.Manager().Queue()
-            log.warning(LOGGER_OBJECT_DETECTION_PUBLISH_QUEUES_REGISTER,
-                        msg=f'Registering {name[:8]} to queues')
+            log.info(LOGGER_OBJECT_DETECTION_PUBLISH_QUEUES_REGISTER,
+                     msg=f'Registering {name[:8]} to queues')
             self._queues[name] = q
             return q
 
     @ensure_parent
     def unregister(self, name):
         with self.lock:
-            log.warning(LOGGER_OBJECT_DETECTION_PUBLISH_QUEUES_UNREGISTER,
-                        msg=f'Unregistering {name[:8]} from queues')
+            log.info(LOGGER_OBJECT_DETECTION_PUBLISH_QUEUES_UNREGISTER,
+                     msg=f'Unregistering {name[:8]} from queues')
             self._queues.pop(name)
 
     @ensure_parent
