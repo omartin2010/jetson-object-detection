@@ -1,6 +1,7 @@
 # flake8: ignore=E501
 from logger import RoboLogger
-from constant import LOGGER_OBJECT_DETECTOR_STARTUP
+from constant import LOGGER_OBJECT_DETECTOR_STARTUP, \
+    LOGGER_OBJECT_DETECTOR_ERROR_HANDLER
 from detector import ObjectDetector
 import asyncio
 import os
@@ -66,8 +67,12 @@ def main():
 def handle_exception(loop, context):
     # context["message"] will always be there; but context["exception"] may not
     msg = context.get("exception", context["message"])
-    log.error(f'Caught exception: {msg}')
-    log.error(f'Calling graceful_shutdown from exception handler.')
+    log.error(
+        LOGGER_OBJECT_DETECTOR_ERROR_HANDLER,
+        f'Caught exception: {msg}')
+    log.critical(
+        LOGGER_OBJECT_DETECTOR_ERROR_HANDLER,
+        f'Calling graceful_shutdown from exception handler.')
     loop.create_task(objectDetector.graceful_shutdown())
 
 

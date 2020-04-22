@@ -12,6 +12,12 @@
                             "client/moveEndEffectorFeedback",
                             "client/ErrorHandling"]
     },
+    "cloud_connection":
+    {
+        "cloud_storage_blob_endpoint": "https://olibot.blob.core.windows.net/",
+        "video_blob_container": "videos3",
+        "images_blob_container": "images"
+    },
     "object_detector":{
         "endpoint_hostname" : "127.0.0.1",
         "endpoint_port" : 5000,

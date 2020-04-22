@@ -11,24 +11,29 @@ Outstanding issues:
 
 - [ ] Tracking Stability :
     - [ ] Find a way to remove dangling processes (maybe garbage collecting some unused queues...???)
-- [X] Ability to record video:
-    - [X] ~~Save to temp file~~
-    - [ ] Upload to blob in proper structure (/date/...)
-    - [ ] Use logic app to send to onedrive if need be
 - [ ] Ability to save image (for future trainings):
     - [ ] Save to temp file
     - [ ] Upload to blob
 - [ ] Add a system watchdog to monitor threads and processes and shutdown if important threads are failing... (like video capture)
-- [X] Move video display to its own task
 - [ ] Improve model - take more pictures
-- [ ] Modify the mqtt processing for setting logging level so that dict can be:</br>
+- [ ] Change video file format from AVI XVID to something else so that OneDrive can read it the browser...
+
+
+Solved issues:
+
+- [X] Ability to record video:
+    - [X] ~~Save to temp file~~
+    - [X] Upload to blob in proper structure (/date/...)
+    - [X] Use logic app to send to onedrive if need be
+- [X] Move video display to its own task
+- [X] Modify the mqtt processing for setting logging level so that dict can be:</br>
 ```
 {
     'logger_id': level,
     'logger_id_2': level
 }
 ```
-- [ ] Fix this error when quitting application</br>
+- [X] Fix this error when quitting application</br>
 ```
 2020-04-20 11:13:33.720:PID1:WARNING:MainThread:obj_detector_proc_mqtt:Cancelled the MQTT dequeing task.
 Traceback (most recent call last):
@@ -37,10 +42,6 @@ Traceback (most recent call last):
   File "/usr/lib/python3.6/asyncio/tasks.py", line 482, in sleep
     return (yield from future)
 ```
-
-
-Solved issues:
-
 - [X] ~~MQTT~~
 - [X] ~~Async event loop~~
 - [X] ~~modify code to read images for scoring via the K4A drivers~~

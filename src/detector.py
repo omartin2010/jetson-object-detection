@@ -1,6 +1,7 @@
 import json
 import tempfile
 import time
+import datetime
 import queue
 import os
 import traceback
@@ -14,6 +15,9 @@ import io
 import shutil
 from PIL import Image
 import base64
+from azure.storage.blob.aio import BlobServiceClient
+from azure.core.exceptions import ResourceExistsError
+from azure.identity.aio import EnvironmentCredential
 import cv2
 import asyncio
 from object_tracking_process import ObjectTrackingProcess
@@ -25,14 +29,14 @@ from constant import K4A_DEFINITIONS
 from constant import LOGGER_OBJECT_DETECTOR_MAIN, \
     OBJECT_DETECTOR_CONFIG_DICT, LOGGER_OBJECT_DETECTOR_MQTT_LOOP, \
     LOGGER_OBJECT_DETECTOR_RUNNER, LOGGER_OBJECT_DETECTOR_ASYNC_LOOP, \
-    LOGGER_OBJECT_DETECTOR_ASYNC_PROCESS_MQTT, \
+    LOGGER_OBJECT_DETECTOR_ASYNC_PROCESS_MQTT, OBJECT_DETECTOR_CLOUD_CONFIG_DICT, \
     LOGGER_OBJECT_DETECTOR_KILL_SWITCH, LOGGER_ASYNC_RUN_DETECTION, \
     LOGGER_ASYNC_RUN_CAPTURE_LOOP, LOGGER_OBJECT_DETECTOR_SORT_TRACKED_OBJECTS, \
     LOGGER_OBJECT_DETECTION_KILL, LOGGER_OBJECT_DETECTION_OBJECT_DETECTION_POOL_MANAGER, \
     LOGGER_OBJECT_DETECTION_THREAD_POLL_OBJECT_TRACKING_PROCESS_QUEUE, \
     LOGGER_OBJECT_DETECTION_SOFTSHUTDOWN, LOGGER_OBJECT_DETECTION_UPDATE_IMG_WITH_INFO, \
     LOGGER_OBJECT_DETECTION_ASYNC_RECORD_VIDEO, LOGGER_OBJECT_DETECTION_GET_DISTANCE_FROM_K4A, \
-    LOGGER_OBJECT_DETECTION_ASYNC_DISPLAY_VIDEO
+    LOGGER_OBJECT_DETECTION_ASYNC_DISPLAY_VIDEO, LOGGER_OBJECT_DETECTION_ASYNC_UPLOAD_FILE_TO_AZURE
 from logger import RoboLogger
 from tracked_object import BoundingBox, TrackedObjectMP, \
     FMT_TF_BBOX, UNDETECTED, UNSEEN, UNSTABLE
@@ -100,6 +104,10 @@ class ObjectDetector(object):
         self.max_tracked_objects = self.configuration[OBJECT_DETECTOR_CONFIG_DICT]['max_tracked_objects']
         self.time_between_scoring_service_calls = self.configuration[OBJECT_DETECTOR_CONFIG_DICT]['time_between_scoring_service_calls']
         self.eventLoop = loop
+        self.__azure_credentials = EnvironmentCredential()
+        self.__blob_service_endpoint = self.configuration[OBJECT_DETECTOR_CLOUD_CONFIG_DICT]['cloud_storage_blob_endpoint']
+        self.__video_cloud_container = self.configuration[OBJECT_DETECTOR_CLOUD_CONFIG_DICT]['video_blob_container']
+        self.__images_cloud_container = self.configuration[OBJECT_DETECTOR_CLOUD_CONFIG_DICT]['images_blob_container']
 
     async def graceful_shutdown(self, s=None) -> None:
         """
@@ -122,17 +130,17 @@ class ObjectDetector(object):
             try:
                 tasks = [t for t in asyncio.Task.all_tasks(loop=self.eventLoop)
                          if t is not asyncio.Task.current_task()]
-                log.warning(LOGGER_OBJECT_DETECTION_SOFTSHUTDOWN,
-                            msg=f'Cancelling task {len(tasks)} tasks...')
+                log.info(LOGGER_OBJECT_DETECTION_SOFTSHUTDOWN,
+                         msg=f'Cancelling task {len(tasks)} tasks...')
                 [task.cancel() for task in tasks]
-                log.warning(LOGGER_OBJECT_DETECTION_SOFTSHUTDOWN,
-                            msg=f'Gaterhing out put of cancellation '
-                                f'of {len(tasks)} tasks...')
+                log.info(LOGGER_OBJECT_DETECTION_SOFTSHUTDOWN,
+                         msg=f'Gaterhing out put of cancellation '
+                             f'of {len(tasks)} tasks...')
                 out_list = await asyncio.gather(*tasks, loop=self.eventLoop, return_exceptions=True)
                 for idx, out in enumerate(out_list):
                     if isinstance(out, Exception):
-                        log.warning(LOGGER_OBJECT_DETECTION_SOFTSHUTDOWN,
-                                    msg=f'Exception in stopping task {idx}')
+                        log.error(LOGGER_OBJECT_DETECTION_SOFTSHUTDOWN,
+                                  msg=f'Exception in stopping task {idx}')
                 log.warning(LOGGER_OBJECT_DETECTION_SOFTSHUTDOWN,
                             msg=f'Done cancelling tasks.')
             except:
@@ -144,14 +152,14 @@ class ObjectDetector(object):
                 self.mqttClient.loop_stop()
                 self.mqttClient.disconnect()
                 if self.mqttClient.is_connected():
-                    log.warning(LOGGER_OBJECT_DETECTION_SOFTSHUTDOWN,
-                                msg=f'Unable to stop MQTT client.')
+                    log.error(LOGGER_OBJECT_DETECTION_SOFTSHUTDOWN,
+                              msg=f'Unable to stop MQTT client.')
                 else:
-                    log.warning(LOGGER_OBJECT_DETECTION_SOFTSHUTDOWN,
-                                msg=f'Stopped MQTT client.')
+                    log.info(LOGGER_OBJECT_DETECTION_SOFTSHUTDOWN,
+                             msg=f'Stopped MQTT client.')
             except:
-                log.warning(LOGGER_OBJECT_DETECTION_SOFTSHUTDOWN,
-                            msg=f'Exception in shutting down MQTT')
+                log.error(LOGGER_OBJECT_DETECTION_SOFTSHUTDOWN,
+                          msg=f'Exception in shutting down MQTT')
 
             # Stop pool manager thread first
             event = self.started_threads[self.object_detection_pool_manager_thread]
@@ -166,14 +174,14 @@ class ObjectDetector(object):
 
             # Stop object watchers
             try:
-                log.warning(LOGGER_OBJECT_DETECTION_SOFTSHUTDOWN,
-                            msg=f'Stopping object watchers...')
+                log.info(LOGGER_OBJECT_DETECTION_SOFTSHUTDOWN,
+                         msg=f'Stopping object watchers...')
                 self.remove_tracked_objects(all_objects=True)
-                log.warning(LOGGER_OBJECT_DETECTION_SOFTSHUTDOWN,
-                            msg=f'Object watchers stopped.')
+                log.info(LOGGER_OBJECT_DETECTION_SOFTSHUTDOWN,
+                         msg=f'Object watchers stopped.')
             except:
-                log.warning(LOGGER_OBJECT_DETECTION_SOFTSHUTDOWN,
-                            msg=f'Exception in shutting down object watchers')
+                log.info(LOGGER_OBJECT_DETECTION_SOFTSHUTDOWN,
+                         msg=f'Exception in shutting down object watchers')
 
             try:
                 # Stop remaining threads
@@ -186,26 +194,26 @@ class ObjectDetector(object):
                                       msg=f'Problem shutting down '
                                           f'some threads!')
             except:
-                log.warning(LOGGER_OBJECT_DETECTION_SOFTSHUTDOWN,
-                            msg=f'Exception in shutting down some '
-                                f'of the remaining threads')
+                log.error(LOGGER_OBJECT_DETECTION_SOFTSHUTDOWN,
+                          msg=f'Exception in shutting down some '
+                              f'of the remaining threads')
 
             # Stop devices
             try:
                 self.k4a_device.disconnect()
-                log.warning(LOGGER_OBJECT_DETECTION_SOFTSHUTDOWN,
-                            msg=f'Disconnected K4A camera')
+                log.info(LOGGER_OBJECT_DETECTION_SOFTSHUTDOWN,
+                         msg=f'Disconnected K4A camera')
             except:
-                log.warning(LOGGER_OBJECT_DETECTION_SOFTSHUTDOWN,
-                            msg=f'Exception in shutting down K4A')
+                log.error(LOGGER_OBJECT_DETECTION_SOFTSHUTDOWN,
+                          msg=f'Exception in shutting down K4A')
 
         except:
-            log.warning(LOGGER_OBJECT_DETECTION_SOFTSHUTDOWN,
-                        msg=f'Problem in graceful_shutdown')
+            log.error(LOGGER_OBJECT_DETECTION_SOFTSHUTDOWN,
+                      msg=f'Problem in graceful_shutdown')
         finally:
+            self.eventLoop.stop()
             log.warning(LOGGER_OBJECT_DETECTION_SOFTSHUTDOWN,
                         msg=f'Done!')
-            self.eventLoop.stop()
 
     async def run(self) -> None:
         """
@@ -274,26 +282,25 @@ class ObjectDetector(object):
         """
         try:
             # region Create Async Tasks
-            log.warning(LOGGER_OBJECT_DETECTOR_ASYNC_LOOP,
-                        msg=f'Launching asyncio TASK :"process MQTT message"')
+            log.info(LOGGER_OBJECT_DETECTOR_ASYNC_LOOP,
+                     msg=f'Launching asyncio TASK :"process MQTT message"')
             self.async_process_mqtt_messages_task = \
                 self.eventLoop.create_task(
                     self.async_process_mqtt_messages(loopDelay=0.25))
 
-            log.warning(LOGGER_OBJECT_DETECTOR_ASYNC_LOOP,
-                        msg=f'Launching asyncio TASK : "async_run_detection"')
+            log.info(LOGGER_OBJECT_DETECTOR_ASYNC_LOOP,
+                     msg=f'Launching asyncio TASK : "async_run_detection"')
             self.async_run_detection_task = \
                 self.eventLoop.create_task(
                     self.async_run_detection())
 
-            log.warning(LOGGER_OBJECT_DETECTOR_ASYNC_LOOP,
-                        msg=f'Launching asyncio TASK : "async_display_video"')
+            log.info(LOGGER_OBJECT_DETECTOR_ASYNC_LOOP,
+                     msg=f'Launching asyncio TASK : "async_display_video"')
             self.async_run_detection_task = \
                 self.eventLoop.create_task(
                     self.async_display_video())
             # endregion
 
-            # self.eventLoop.run_forever()
             log.warning(LOGGER_OBJECT_DETECTOR_ASYNC_LOOP,
                         msg=f'Asyncio tasks started')
 
@@ -314,8 +321,8 @@ class ObjectDetector(object):
                             for topic in self.configuration['mqtt']['subscribedTopics']]
 
         def on_connect(client, userdata, flags, rc):
-            log.warning(LOGGER_OBJECT_DETECTOR_MQTT_LOOP,
-                        msg=f'Connected to MQTT broker. Result code {str(rc)}')
+            log.info(LOGGER_OBJECT_DETECTOR_MQTT_LOOP,
+                     msg=f'Connected to MQTT broker. Result code {str(rc)}')
             mqtt_connect_result, self.mqtt_connect_mid = client.subscribe(
                 self.mqtt_topics)
             if mqtt_connect_result == mqtt.MQTT_ERR_SUCCESS:
@@ -337,14 +344,14 @@ class ObjectDetector(object):
         def on_disconnect(client, userdata, rc=0):
             """callback for handling disconnects
             """
-            log.info(LOGGER_OBJECT_DETECTOR_MQTT_LOOP,
-                     f'Disconnected MQTT result code = {rc}. '
-                     f'Should automatically re-connect to broker')
+            log.warning(LOGGER_OBJECT_DETECTOR_MQTT_LOOP,
+                        f'Disconnected MQTT result code = {rc}. '
+                        f'Should automatically re-connect to broker')
 
         def on_subscribe(client, userdata, mid, granted_qos):
             if mid == self.mqtt_connect_mid:
-                log.warning(LOGGER_OBJECT_DETECTOR_MQTT_LOOP,
-                            msg=f'Subscribed to topics. Granted QOS = {granted_qos}')
+                log.debug(LOGGER_OBJECT_DETECTOR_MQTT_LOOP,
+                          msg=f'Subscribed to topics. Granted QOS = {granted_qos}')
             else:
                 log.error(LOGGER_OBJECT_DETECTOR_MQTT_LOOP,
                           msg=f'Strange... MID does not match self.mqtt_connect_mid')
@@ -594,17 +601,24 @@ class ObjectDetector(object):
                     sleep_duration = max(0, self.frame_duration - (time.time() - loop_start))
                     await asyncio.sleep(sleep_duration)
                 path = shutil.copy(filename, os.path.join(os.getcwd()))
-                log.warning(LOGGER_OBJECT_DETECTION_ASYNC_RECORD_VIDEO,
-                            msg=f'Recording available in {path} for the '
-                                f'next {keep_file_time} seconds')
                 try:
+                    await self.async_upload_file_to_azure(
+                        container_name=self.__video_cloud_container,
+                        local_blob_path=filename)
+                    log.warning(LOGGER_OBJECT_DETECTION_ASYNC_RECORD_VIDEO,
+                                msg=f'Recording locally available in {path} '
+                                    f'for {keep_file_time} seconds')
                     await asyncio.sleep(keep_file_time)
                     os.remove(path)
                     log.warning(LOGGER_OBJECT_DETECTION_ASYNC_RECORD_VIDEO,
                                 msg=f'Deleted {path}.')
                 except:
                     log.error(LOGGER_OBJECT_DETECTION_ASYNC_RECORD_VIDEO,
-                              msg=f'Error deleting {path}.')
+                              msg=f'Uncaught Exception. Details = '
+                                  f'{traceback.print_exc()}')
+        except asyncio.futures.CancelledError:
+            log.warning(LOGGER_OBJECT_DETECTION_ASYNC_RECORD_VIDEO,
+                        msg=f'Cancelled the video recording task.')
         except:
             log.error(LOGGER_OBJECT_DETECTION_ASYNC_RECORD_VIDEO,
                       msg=f'Error in async_record_video : '
@@ -613,6 +627,87 @@ class ObjectDetector(object):
                             f'{traceback.print_exc()}')
         finally:
             self.video_writer.release()
+
+    async def async_upload_file_to_azure(self,
+                                         container_name: str,
+                                         local_blob_path: str) -> None:
+        """
+        Description :
+            Sends file to cloud. Files could be video, or photos, or others
+        Args:
+            container_name : str, container name to be created in Azure
+            local_blob_path : str, absolute path of object to be uploaded
+        Returns :
+            Sucess or None if failed.
+        """
+        try:
+            metadata = {
+                'create_time': datetime.datetime.now().strftime(
+                    "%Y-%m-%d %H:%M:%S.%f"),
+                'type': 'video_file_container'
+            }
+            blob_service_client = BlobServiceClient(
+                account_url=self.__blob_service_endpoint,
+                credential=self.__azure_credentials)
+            log.debug(
+                LOGGER_OBJECT_DETECTION_ASYNC_UPLOAD_FILE_TO_AZURE,
+                msg=f'Blob service client created, attempting to '
+                    f'create the container.')
+            async with blob_service_client:
+                container_client = blob_service_client.get_container_client(
+                    container_name)
+                assert container_client, f'container_client ' \
+                                         f'is set to {container_client}'
+                log.debug(
+                    LOGGER_OBJECT_DETECTION_ASYNC_UPLOAD_FILE_TO_AZURE,
+                    msg=f'Container client created = {container_client}.'
+                        f'About to await creation of container '
+                        f'{container_name}.')
+                try:
+                    await container_client.create_container(metadata=metadata)
+                except ResourceExistsError:
+                    log.warning(
+                        LOGGER_OBJECT_DETECTION_ASYNC_UPLOAD_FILE_TO_AZURE,
+                        msg=f'Blob container {container_name} already '
+                            f'exists on storage account '
+                            f'{self.__blob_service_endpoint}')
+                except Exception:
+                    log.error(
+                        LOGGER_OBJECT_DETECTION_ASYNC_UPLOAD_FILE_TO_AZURE,
+                        msg=f'Error creating blob {traceback.print_exc()}')
+                else:
+                    log.warning(
+                        LOGGER_OBJECT_DETECTION_ASYNC_UPLOAD_FILE_TO_AZURE,
+                        msg=f'Container {container_name} created.')
+                filename = local_blob_path.split('/')[-1]
+                target_filename = os.path.join(
+                    datetime.datetime.now().strftime("%Y/%m/%d/%H"),
+                    filename)
+                blob_client = container_client.get_blob_client(target_filename)
+                log.info(LOGGER_OBJECT_DETECTION_ASYNC_UPLOAD_FILE_TO_AZURE,
+                         msg=f'Uploading blob {local_blob_path} in container '
+                             f'{container_name} with target blob name = '
+                             f'{target_filename}')
+                try:
+                    with open(local_blob_path, 'rb') as data:
+                        await blob_client.upload_blob(
+                            data,
+                            blob_type='BlockBlob',
+                            metadata=metadata)
+                except Exception:
+                    log.error(LOGGER_OBJECT_DETECTION_ASYNC_UPLOAD_FILE_TO_AZURE,
+                              msg=f'Error uploading blob {traceback.print_exc()}')
+                log.warning(LOGGER_OBJECT_DETECTION_ASYNC_UPLOAD_FILE_TO_AZURE,
+                            msg=f'Upload completed. Done')
+        except asyncio.futures.CancelledError:
+            log.warning(LOGGER_OBJECT_DETECTION_ASYNC_UPLOAD_FILE_TO_AZURE,
+                        msg=f'Cancelled the video uploading task.')
+        except Exception:
+            log.error(LOGGER_OBJECT_DETECTION_ASYNC_UPLOAD_FILE_TO_AZURE,
+                      msg=f'Error uploading file to azure : '
+                          f'{traceback.print_exc()}')
+            raise Exception(f'Error uploading file to azure :'
+                            f'{traceback.print_exc()}')
 
     async def async_run_detection(self) -> None:
         """
@@ -759,21 +854,21 @@ class ObjectDetector(object):
                         'flag_for_kill': False
                     }
                     log.warning(LOGGER_OBJECT_DETECTION_OBJECT_DETECTION_POOL_MANAGER,
-                                msg=f'Creating proc/thread mapping for new object {new_object_id}')
+                                msg=f'Creating proc/thread mapping for new object {new_object_id[:8]}')
                     object_counter += 1
                     proc.start()
-                    log.warning(LOGGER_OBJECT_DETECTION_OBJECT_DETECTION_POOL_MANAGER,
-                                msg=f'Manager launched process {proc.pid} for object {new_object_id}.')
+                    log.info(LOGGER_OBJECT_DETECTION_OBJECT_DETECTION_POOL_MANAGER,
+                             msg=f'Manager launched process {proc.pid} for object {new_object_id[:8]}.')
                     thread.name += f'_pid{proc.pid}'
                     thread.start()
-                    log.warning(LOGGER_OBJECT_DETECTION_OBJECT_DETECTION_POOL_MANAGER,
-                                msg=f'Manager launched thread for object {new_object_id}.')
+                    log.info(LOGGER_OBJECT_DETECTION_OBJECT_DETECTION_POOL_MANAGER,
+                             msg=f'Manager launched thread for object {new_object_id[:8]}.')
                     new_object.monitored = True
                 # Stop proc/thread for deleted items
                 for (deleted_object_id, deleted_object) in \
                         deleted_objects_dict.items():
                     log.warning(LOGGER_OBJECT_DETECTION_OBJECT_DETECTION_POOL_MANAGER,
-                                msg=f'Marking proc/thread mapping of object {deleted_object_id} for deletion')
+                                msg=f'Marking proc/thread mapping of object {deleted_object_id[:8]} for deletion')
                     self.tracked_objects_mp[deleted_object_id]['flag_for_kill'] = True
                     self.tracked_objects_mp[deleted_object_id]['reason'] = UNDETECTED
                 # Check tracked_objects sanity, flag for kill if required
@@ -789,14 +884,14 @@ class ObjectDetector(object):
                         tracked_object_mapping_dict['flag_for_kill'] = True
                         tracked_object_mapping_dict['reason'] = UNSEEN
                         log.warning(LOGGER_OBJECT_DETECTION_OBJECT_DETECTION_POOL_MANAGER,
-                                    msg=f'Marking proc/thread mapping of object {obj_id} '
+                                    msg=f'Marking proc/thread mapping of object {obj_id[:8]} '
                                         f'for deletion, unseen for {unseen_time:.2f}s')
                     # verify if object proc and thread are healthy - if thread or proc is dead, kill tracker
                     elif not (proc.is_alive() and thread.is_alive()):
                         tracked_object_mapping_dict['flag_for_kill'] = True
                         tracked_object_mapping_dict['reason'] = UNSTABLE
                         log.warning(LOGGER_OBJECT_DETECTION_OBJECT_DETECTION_POOL_MANAGER,
-                                    msg=f'Marking proc/thread mapping of object {obj_id} '
+                                    msg=f'Marking proc/thread mapping of object {obj_id[:8]} '
                                         f'for deletion, proc or thread is stopped, '
                                         f'need to get back to stable state')
                 # Call function that kills the threads/procs that need cleanup
@@ -856,7 +951,7 @@ class ObjectDetector(object):
                 while proc.is_alive():
                     log.warning(LOGGER_OBJECT_DETECTION_KILL,
                                 msg=f'Attempting to cancel PID {proc.pid} for '
-                                    f'object {obj_id}.')
+                                    f'object {obj_id[:8]}.')
                     proc.join(2)  # Wait up to X sec
                     exitcode = proc.exitcode
                     log.warning(LOGGER_OBJECT_DETECTION_KILL,
@@ -901,11 +996,13 @@ class ObjectDetector(object):
         """
         try:
             log.warning(LOGGER_OBJECT_DETECTION_THREAD_POLL_OBJECT_TRACKING_PROCESS_QUEUE,
-                        msg=f'Launching thread for object ID {tracked_object_mp.id}')
+                        msg=f'Launching thread for object ID '
+                            f'{str(tracked_object_mp.id)[:8]}')
             while not exit_thread_event.is_set():
                 # Replace object in tracked object with what we get from the queue
                 # wait max 2 second
-                new_tracked_object_mp = tracked_object_queue.get(block=True, timeout=2)
+                new_tracked_object_mp = tracked_object_queue.get(
+                    block=True, timeout=2)
                 obj_id = str(new_tracked_object_mp.id)
                 # Get the new coordinates in the object.
                 if obj_id in self.tracked_objects_mp.keys():
@@ -916,12 +1013,14 @@ class ObjectDetector(object):
                 else:
                     # If object not there, end thread
                     log.warning(LOGGER_OBJECT_DETECTION_THREAD_POLL_OBJECT_TRACKING_PROCESS_QUEUE,
-                                msg=f'Not finding object {obj_id[:8]}.. in self.tracked_objects_mp.')
+                                msg=f'Not finding object {obj_id[:8]}.. '
+                                    f'in self.tracked_objects_mp.')
                     break
         except queue.Empty:
             log.warning(LOGGER_OBJECT_DETECTION_THREAD_POLL_OBJECT_TRACKING_PROCESS_QUEUE,
-                        msg=f'No new object was placed on the queue, tracking process '
-                            f'may have been terminated by parent process.')
+                        msg=f'No new object was placed on the queue, '
+                            f'tracking process may have been terminated '
+                            f'by parent process.')
         except:
             raise Exception(f'Problem: {traceback.print_exc()}')
         finally:

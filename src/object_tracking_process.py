@@ -61,9 +61,9 @@ class ObjectTrackingProcess(Process):
             Main function that runs the process.
         """
         try:
-            log.warning(LOGGER_OBJECT_DETECTION_PROCESS_TRACK_OPENCV_OBJECT,
-                        f'Launching process {os.getpid()} for object ID '
-                        f'{self.tracked_object.id}')
+            log.info(LOGGER_OBJECT_DETECTION_PROCESS_TRACK_OPENCV_OBJECT,
+                     f'Launching process {os.getpid()} for object ID '
+                     f'{str(self.tracked_object.id)[:8]}')
             exitcode = 0
             tracker = OPENCV_OBJECT_TRACKERS[self.tracker_alg]()
             _ = tracker.init(self.initial_image, self.tracked_object.get_bbox())
@@ -79,8 +79,8 @@ class ObjectTrackingProcess(Process):
                     image = self.image_queue.get(block=True, timeout=2)
                 except queue.Empty:
                     n_queue_errors += 1
-                    log.critical(LOGGER_OBJECT_DETECTION_PROCESS_TRACK_OPENCV_OBJECT,
-                                 msg=f'Empty image queue. Strange... Investigate')
+                    log.error(LOGGER_OBJECT_DETECTION_PROCESS_TRACK_OPENCV_OBJECT,
+                              msg=f'Empty image queue. Strange... Investigate')
                     if n_queue_errors >= 5:
                         log.critical(LOGGER_OBJECT_DETECTION_PROCESS_TRACK_OPENCV_OBJECT,
                                      msg=f'Empty image queue for more than 5 loops : '
@@ -100,8 +100,8 @@ class ObjectTrackingProcess(Process):
                     self.tracked_object.score = new_score
                     self.tracked_object.object_class = new_class
                     log.warning(LOGGER_OBJECT_DETECTION_PROCESS_TRACK_OPENCV_OBJECT,
-                                msg=f'Getting new position from tensorflow for '
-                                    f'object {self.tracked_object.id}')
+                                msg=f'Obtianed new bbox from tensorflow '
+                                    f'(object id = {str(self.tracked_object.id)[:8]})')
                 # If no TF scoring, queue is Empty ==> use tracker to find position
                 except queue.Empty:
                     # Costly operation - update opencv tracker information
@@ -121,8 +121,9 @@ class ObjectTrackingProcess(Process):
                             last_warning_message_time = now
                             log.warning(
                                 LOGGER_OBJECT_DETECTION_PROCESS_TRACK_OPENCV_OBJECT,
-                                msg=f'Trying to reinitialize tracker for object '
-                                    f'{self.tracked_object.id} with last bounding box info.')
+                                msg=f'Trying to reinitialize tracker for obj '
+                                    f'{str(self.tracked_object.id)[:8]} '
+                                    f'with last bounding box info.')
                         tracker = None
                         tracker = OPENCV_OBJECT_TRACKERS[self.tracker_alg]()
                         tracker.init(image, new_bbox.get_bbox())
@@ -138,14 +139,16 @@ class ObjectTrackingProcess(Process):
                 if n_loops % logging_loops == 0:
                     log.debug(
                         LOGGER_OBJECT_DETECTION_PROCESS_TRACK_OPENCV_OBJECT,
-                        msg=f'Process still tracking {self.tracked_object.id} '
+                        msg=f'Process still tracking '
+                            f'{str(self.tracked_object.id)[:8]} '
                             f'after {n_loops} loops - object class = '
                             f'{self.tracked_object.object_class}.')
                 n_loops += 1
         except queue.Full:
             log.critical(LOGGER_OBJECT_DETECTION_PROCESS_TRACK_OPENCV_OBJECT,
-                         msg=f'Output queue full (object {self.tracked_object.id}).'
-                             f'See thread_poll_object_tracking_process_queue '
+                         msg=f'Output queue full (object '
+                             f'{str(self.tracked_object.id)[:8]}). See '
+                             f'thread_poll_object_tracking_process_queue '
                              f'to see what might be wrong.')
             exitcode = 2
         except:
@@ -154,7 +157,8 @@ class ObjectTrackingProcess(Process):
             exitcode = 3
         finally:
             log.warning(LOGGER_OBJECT_DETECTION_PROCESS_TRACK_OPENCV_OBJECT,
-                        msg=f'Process {os.getpid()} done for object {self.tracked_object.id}')
+                        msg=f'Process {os.getpid()} done for object '
+                            f'{str(self.tracked_object.id)[:8]}')
         return exitcode
 
     def shutdown(self):

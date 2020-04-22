@@ -2,6 +2,7 @@ import pyk4a
 import cv2
 # region LOGGERS
 LOGGER_OBJECT_DETECTOR_STARTUP = 'obj_detector_startup'
+LOGGER_OBJECT_DETECTOR_ERROR_HANDLER = 'obj_detector_err_handler'
 LOGGER_OBJECT_DETECTOR_MAIN = 'obj_detector_object_py'
 LOGGER_OBJECT_DETECTOR_LOAD_MODEL = 'obj_detector_object_py_load_model'
 LOGGER_ASYNC_RUN_DETECTION = 'obj_detector_run_detection'
@@ -25,6 +26,7 @@ LOGGER_OBJECT_DETECTION_GET_DISTANCE_FROM_K4A = 'obj_detector__get_distance_from
 LOGGER_OBJECT_DETECTION_PUBLISH_QUEUES_UNREGISTER = 'obj_detector_publish_queue_unregister'
 LOGGER_OBJECT_DETECTION_PUBLISH_QUEUES_REGISTER = 'obj_detector_publish_queue_register'
 LOGGER_OBJECT_DETECTION_ASYNC_DISPLAY_VIDEO = 'obj_detector_async_display_video'
+LOGGER_OBJECT_DETECTION_ASYNC_UPLOAD_FILE_TO_AZURE = 'obj_detector_async_upload_file_to_azure'
 # endregion
 
 K4A_DEFINITIONS = {
@@ -59,3 +61,4 @@ OPENCV_OBJECT_TRACKERS = {
 
 # region various constants
 OBJECT_DETECTOR_CONFIG_DICT = 'object_detector'
+OBJECT_DETECTOR_CLOUD_CONFIG_DICT = 'cloud_connection'
