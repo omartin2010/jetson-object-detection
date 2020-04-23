@@ -19,7 +19,6 @@ Outstanding issues:
     - [X] ~~Upload to blob~~
     - [X] ~~Save to temp file~~
 - [ ] Move cloud uploader to other class...?
-- [ ] Move cloud uploader to other class...?
 - [ ] Make the robot work without web scoring and without crashing.
 
 Solved issues:

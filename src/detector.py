@@ -23,7 +23,8 @@ import cv2
 import asyncio
 from object_tracking_process import ObjectTrackingProcess
 from aiohttp import ClientSession
-from aiohttp.client_exceptions import ServerDisconnectedError
+from aiohttp.client_exceptions import ServerDisconnectedError, \
+    ClientConnectorError
 from pyk4a import PyK4A, K4AException, FPS, Calibration, CalibrationType
 from pyk4a import Config as k4aConf
 from constant import K4A_DEFINITIONS
@@ -630,8 +631,9 @@ class ObjectDetector(object):
                     while time.time() - start_time < duration:
                         loop_start = time.time()
                         video_writer.write(self.resized_im_for_video)
-                        sleep_duration = max(0, self.frame_duration - (time.time() - loop_start))
-                        await asyncio.sleep(sleep_duration)
+                        duration = time.time() - loop_start
+                        sleep_time = max(0, self.frame_duration - duration)
+                        await asyncio.sleep(sleep_time)
                 except Exception:
                     raise Exception()
                 finally:
@@ -868,12 +870,14 @@ class ObjectDetector(object):
             loop_time = 0
             n_loops = 0
             task_duration = 0
+            back_off_retry = 0
             # Only launch loop when ready (image on the self.rgb...)
             itm = self.ready_queue.get(block=True)
             if itm is None:
                 raise Exception('Empty Queue...')
             # Launch the loop
             while True:
+                start_time = time.time()
                 height, width = self.rgb_image_color_np_resized.shape[:2]
                 # Send image to bytes buffer
                 im = Image.fromarray(self.rgb_image_color_np_resized)
@@ -883,63 +887,81 @@ class ObjectDetector(object):
                 payload = {'image': base64_encoded_image.decode('ascii')}
                 start_time = time.time()
                 async with ClientSession() as session:
-                    async with session.post(
-                            url=model_url,
-                            data=json.dumps(payload),
-                            headers=headers) as response:
-                        end_time = time.time()
-                        if response.status == 200:
-                            body = await response.json()
-                            log.debug(LOGGER_ASYNC_RUN_DETECTION,
-                                      msg=f'Got model response... iteration {n_loops}')
-                            task_start_time = time.time()
-                            # Post results to queue to be consumed by
-                            # thread_object_detection_pool_manager
-                            try:
-                                self.ready_for_first_detection_event.set()
-                                self.object_detection_result_queue.put(
-                                    item=(body['boxes'],
-                                          body['scores'],
-                                          body['classes']),
-                                    block=True,
-                                    timeout=2)
-                            except queue.Full:
-                                log.critical(LOGGER_ASYNC_RUN_DETECTION,
-                                             msg=f'OD Queue full. Pls investigate '
-                                                 f'refresh_tracked_objects. Is it running, '
-                                                 f'blocked or canceled?')
-                                # raise Exception('OD Queue full, Pls investigate')
-                            task_duration += time.time() - task_start_time
-                            loop_time += (end_time - start_time)
-                            n_loops += 1
-                            if n_loops % logging_loops == 0:
-                                task_duration /= logging_loops
-                                loop_time /= logging_loops
+                    try:
+                        async with session.post(
+                                url=model_url,
+                                data=json.dumps(payload),
+                                headers=headers) as response:
+                            end_time = time.time()
+                            if response.status == 200:
+                                body = await response.json()
                                 log.debug(LOGGER_ASYNC_RUN_DETECTION,
-                                          msg=f'Average loop for the past {logging_loops} '
-                                              f'iteration is {loop_time:.3f}s')
-                                log.debug(LOGGER_ASYNC_RUN_DETECTION,
-                                          msg=f'Average task time for past {logging_loops} '
-                                              f'iterations is {task_duration:.3f}s')
-                                loop_time = 0
-                                task_duration = 0
-                        else:
-                            raise Exception(f'HTTP response code is '
-                                            f'{response.status} for detection'
-                                            f' service...')
+                                          msg=f'Got model response... iteration {n_loops}')
+                                task_start_time = time.time()
+                                # Post results to queue to be consumed by
+                                # thread_object_detection_pool_manager
+                                try:
+                                    self.ready_for_first_detection_event.set()
+                                    self.object_detection_result_queue.put(
+                                        item=(body['boxes'],
+                                              body['scores'],
+                                              body['classes']),
+                                        block=True,
+                                        timeout=2)
+                                except queue.Full:
+                                    log.critical(LOGGER_ASYNC_RUN_DETECTION,
+                                                 msg=f'OD Queue full. Pls investigate '
+                                                     f'refresh_tracked_objects. Is it running, '
+                                                     f'blocked or canceled?')
+                                    # raise Exception('OD Queue full, Pls investigate')
+                                task_duration += time.time() - task_start_time
+                                loop_time += (end_time - start_time)
+                                n_loops += 1
+                                if n_loops % logging_loops == 0:
+                                    task_duration /= logging_loops
+                                    loop_time /= logging_loops
+                                    log.debug(LOGGER_ASYNC_RUN_DETECTION,
+                                              msg=f'Average loop for the past {logging_loops} '
+                                                  f'iteration is {loop_time:.3f}s')
+                                    log.debug(LOGGER_ASYNC_RUN_DETECTION,
+                                              msg=f'Average task time for past {logging_loops} '
+                                                  f'iterations is {task_duration:.3f}s')
+                                    loop_time = 0
+                                    task_duration = 0
+                            else:
+                                raise Exception(f'HTTP response code is '
+                                                f'{response.status} for detection'
+                                                f' service...')
+                    except ClientConnectorError as err:
+                        if back_off_retry + 5 <= 60:
+                            back_off_retry += 5
+                        log.warning(LOGGER_ASYNC_RUN_DETECTION,
+                                    msg=f'Cannot connect to http://{err.host}'
+                                        f':{err.port}. Retrying in '
+                                        f'{back_off_retry} secs.')
+                    except ConnectionRefusedError:
+                        if back_off_retry + 5 <= 60:
+                            back_off_retry += 5
+                        log.warning(LOGGER_ASYNC_RUN_DETECTION,
+                                    msg=f'Connection to {model_url} refused. '
+                                        f'Retying in {back_off_retry} '
+                                        f'seconds')
+                    except ServerDisconnectedError:
+                        if back_off_retry + 5 <= 60:
+                            back_off_retry += 5
+                        log.error(LOGGER_ASYNC_RUN_DETECTION,
+                                  msg=f'HTTP prediction service error: '
+                                      f'{traceback.print_exc()} -> sleeping '
+                                      f'{self.time_between_scoring_service_calls}s '
+                                      f'and continuing')
+                    except Exception:
+                        raise
+                    finally:
+                        await asyncio.sleep(back_off_retry)
                 # Pause for loopDelay seconds
-                await asyncio.sleep(self.time_between_scoring_service_calls)
-        except ConnectionRefusedError:
-            log.warning(LOGGER_ASYNC_RUN_DETECTION,
-                        msg=f'HTTP prediction service not responding. '
-                            f'Maybe at boot time? - sleeping and retrying.')
-        except ServerDisconnectedError:
-            log.error(LOGGER_ASYNC_RUN_DETECTION,
-                      msg=f'HTTP prediction service error: '
-                          f'{traceback.print_exc()} -> sleeping '
-                          f'{self.time_between_scoring_service_calls}s '
-                          f'and continuing')
-            await asyncio.sleep(self.time_between_scoring_service_calls)
+                duration = time.time() - start_time
+                sleep_time = max(0, self.time_between_scoring_service_calls - duration)
+                await asyncio.sleep(sleep_time)
         except asyncio.futures.CancelledError:
             log.warning(LOGGER_ASYNC_RUN_DETECTION,
                         msg=f'Cancelled the detection task.')
