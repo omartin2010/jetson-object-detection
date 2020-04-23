@@ -11,13 +11,14 @@ Outstanding issues:
 
 - [ ] Tracking Stability :
     - [ ] Find a way to remove dangling processes (maybe garbage collecting some unused queues...???)
-- [ ] Ability to save image (for future trainings):
-    - [ ] Save to temp file
-    - [ ] Upload to blob
-- [ ] Add a system watchdog to monitor threads and processes and shutdown if important threads are failing... (like video capture)
+    - [ ] sometimes, when I remove objects, it doesn't get removed... maybe it think it's tracked... need to refresh TF info regardless of tracker working!
+    - [ ] Add a system watchdog to monitor threads and processes and shutdown if important threads are failing... (like video capture)
+    - [ ] K4A crashes sometimes when I start monitoring two objects... investigate queues and locks...
+- [X] Ability to save image (for future trainings):
+    - [X] ~~Save to temp file~~
+    - [X] ~~Upload to blob~~
 - [ ] Improve model - take more pictures
 - [ ] Move cloud uploader to other class...?
-- [ ] sometimes, when I remove objects, it doesn't get removed... maybe it think it's tracked... need to refresh TF info regardless of tracker working!
 
 Solved issues:
 

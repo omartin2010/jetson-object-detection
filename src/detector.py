@@ -28,16 +28,23 @@ from pyk4a import PyK4A, K4AException, FPS, Calibration, CalibrationType
 from pyk4a import Config as k4aConf
 from constant import K4A_DEFINITIONS
 from constant import LOGGER_OBJECT_DETECTOR_MAIN, \
-    OBJECT_DETECTOR_CONFIG_DICT, LOGGER_OBJECT_DETECTOR_MQTT_LOOP, \
+    OBJECT_DETECTOR_CONFIG_DICT, \
+    LOGGER_OBJECT_DETECTOR_MQTT_LOOP, \
     LOGGER_OBJECT_DETECTOR_RUNNER, LOGGER_OBJECT_DETECTOR_ASYNC_LOOP, \
-    LOGGER_OBJECT_DETECTOR_ASYNC_PROCESS_MQTT, OBJECT_DETECTOR_CLOUD_CONFIG_DICT, \
-    LOGGER_OBJECT_DETECTOR_KILL_SWITCH, LOGGER_ASYNC_RUN_DETECTION, \
-    LOGGER_ASYNC_RUN_CAPTURE_LOOP, LOGGER_OBJECT_DETECTOR_SORT_TRACKED_OBJECTS, \
-    LOGGER_OBJECT_DETECTION_KILL, LOGGER_OBJECT_DETECTION_OBJECT_DETECTION_POOL_MANAGER, \
+    LOGGER_OBJECT_DETECTOR_ASYNC_PROCESS_MQTT, \
+    OBJECT_DETECTOR_CLOUD_CONFIG_DICT, LOGGER_OBJECT_DETECTOR_KILL_SWITCH, \
+    LOGGER_ASYNC_RUN_DETECTION, LOGGER_ASYNC_RUN_CAPTURE_LOOP, \
+    LOGGER_OBJECT_DETECTOR_SORT_TRACKED_OBJECTS, \
+    LOGGER_OBJECT_DETECTION_KILL, \
+    LOGGER_OBJECT_DETECTION_OBJECT_DETECTION_POOL_MANAGER, \
     LOGGER_OBJECT_DETECTION_THREAD_POLL_OBJECT_TRACKING_PROCESS_QUEUE, \
-    LOGGER_OBJECT_DETECTION_SOFTSHUTDOWN, LOGGER_OBJECT_DETECTION_UPDATE_IMG_WITH_INFO, \
-    LOGGER_OBJECT_DETECTION_ASYNC_RECORD_VIDEO, LOGGER_OBJECT_DETECTION_GET_DISTANCE_FROM_K4A, \
-    LOGGER_OBJECT_DETECTION_ASYNC_DISPLAY_VIDEO, LOGGER_OBJECT_DETECTION_ASYNC_UPLOAD_FILE_TO_AZURE
+    LOGGER_OBJECT_DETECTION_SOFTSHUTDOWN, \
+    LOGGER_OBJECT_DETECTION_UPDATE_IMG_WITH_INFO, \
+    LOGGER_OBJECT_DETECTION_ASYNC_RECORD_VIDEO, \
+    LOGGER_OBJECT_DETECTION_ASYNC_SAVE_PICTURE, \
+    LOGGER_OBJECT_DETECTION_GET_DISTANCE_FROM_K4A, \
+    LOGGER_OBJECT_DETECTION_ASYNC_DISPLAY_VIDEO, \
+    LOGGER_OBJECT_DETECTION_ASYNC_UPLOAD_FILE_TO_AZURE
 from logger import RoboLogger
 from tracked_object import BoundingBox, TrackedObjectMP, \
     FMT_TF_BBOX, UNDETECTED, UNSEEN, UNSTABLE
@@ -79,6 +86,8 @@ class ObjectDetector(object):
         self._fourcc = cv2.VideoWriter_fourcc(*'MJPG')
         self.__video_file_extension = '.avi'
         self.__video_content_type = 'video/x-msvideo'
+        self.__image_file_extension = '.jpg'
+        self.__image_content_type = 'image/jpeg'
         self.__fix_category_index_dict()
         self.started_threads = {}
         self.show_video = False
@@ -432,9 +441,25 @@ class ObjectDetector(object):
                             for logger, level in msgdict.items():
                                 log.setLevel(logger, level)
                         elif currentMQTTMoveMessage.topic == 'bot/jetson/start_video':
-                            duration = float(msgdict['duration'])
+                            if 'duration' in msgdict:
+                                duration = float(msgdict['duration'])
+                            else:
+                                duration = 5.0
                             self.eventLoop.create_task(
                                 self.async_record_video(duration=duration))
+                        elif currentMQTTMoveMessage.topic == 'bot/jetson/snap_picture':
+                            if 'obj_class' in msgdict:
+                                obj_class = float(msgdict['obj_class'])
+                            else:
+                                obj_class = None
+                            if 'include_visualisation_data' in msgdict:
+                                include_visualisation_data = msgdict['include_visualisation_data']
+                            else:
+                                include_visualisation_data = False
+                            self.eventLoop.create_task(
+                                self.async_save_picture(
+                                    obj_class=obj_class,
+                                    include_visualisation_data=include_visualisation_data))
                         else:
                             raise NotImplementedError
                     await asyncio.sleep(loopDelay)
@@ -450,6 +475,7 @@ class ObjectDetector(object):
         except Exception:
             log.error(LOGGER_OBJECT_DETECTOR_ASYNC_PROCESS_MQTT,
                       msg=f'Error: {traceback.print_exc()}')
+            raise
 
     def thread_capture_loop(self,
                             exit_thread_event: threading.Event) -> None:
@@ -472,7 +498,7 @@ class ObjectDetector(object):
                 start_time = time.time()
                 # Read frame from camera
                 try:
-                    bgra_image_color_np, image_depth_np = \
+                    self.bgra_image_color_np, image_depth_np = \
                         self.k4a_device.get_capture(
                             color_only=False,
                             transform_depth_to_color=True)
@@ -484,7 +510,7 @@ class ObjectDetector(object):
                                      f'Err = {err}')
                     if k4a_errors > 5:
                         raise K4AException('Too many errors. Quitting.')
-                self.rgb_image_color_np = bgra_image_color_np[:, :, :3][..., ::-1]
+                self.rgb_image_color_np = self.bgra_image_color_np[:, :, :3][..., ::-1]
                 self.rgb_image_color_np_resized = np.asarray(
                     Image.fromarray(self.rgb_image_color_np).resize(
                         self.resized_image_resolution))
@@ -500,7 +526,7 @@ class ObjectDetector(object):
                 with self.lock_tracked_objects_mp:
                     self.__get_distance_from_k4a()
                 # Visualization of the results of a detection.
-                img = bgra_image_color_np[:, :, :3]
+                img = self.bgra_image_color_np[:, :, :3]
                 with self.lock_tracked_objects_mp:
                     img = self.__update_image_with_info(img)
                 resized_im = cv2.resize(img, self.display_image_resolution)
@@ -588,19 +614,19 @@ class ObjectDetector(object):
             # Create temp dir
             with tempfile.TemporaryDirectory() as tmpdirname:
                 # Create temp file
-                filename = os.path.join(
+                local_file_path = os.path.join(
                     tmpdirname,
                     next(tempfile._get_candidate_names()) + self.__video_file_extension)
                 log.warning(LOGGER_OBJECT_DETECTION_ASYNC_RECORD_VIDEO,
-                            msg=f'Created file {filename} to store video. '
+                            msg=f'Created file {local_file_path} to store video. '
                                 f'Res = {self.display_image_resolution}')
                 try:
                     video_writer = cv2.VideoWriter(
-                        filename, self._fourcc,
+                        local_file_path, self._fourcc,
                         float(self.fps), self.display_image_resolution)
                     # wait for duration seconds for recording to take place
                     log.warning(LOGGER_OBJECT_DETECTION_ASYNC_RECORD_VIDEO,
-                                msg=f'Recording video to {filename} now.')
+                                msg=f'Recording video to {local_file_path} now.')
                     while time.time() - start_time < duration:
                         loop_start = time.time()
                         video_writer.write(self.resized_im_for_video)
@@ -612,15 +638,20 @@ class ObjectDetector(object):
                     video_writer.release()
                     log.debug(LOGGER_OBJECT_DETECTION_ASYNC_RECORD_VIDEO,
                               msg=f'Recording completed, released video writer.')
-                path = shutil.copy(filename, os.path.join(os.getcwd()))
+                path = shutil.copy(local_file_path, os.path.join(os.getcwd()))
                 try:
+                    filename = local_file_path.split('/')[-1]
+                    target_filename = os.path.join(
+                        datetime.datetime.now().strftime("%Y/%m/%d/%H"),
+                        filename)
                     await self.async_upload_file_to_azure(
                         container_name=self.__video_cloud_container,
-                        local_blob_path=filename,
+                        local_file_path=filename,
+                        target_blob_filename=target_filename,
                         content_type=self.__video_content_type)
-                    log.warning(LOGGER_OBJECT_DETECTION_ASYNC_RECORD_VIDEO,
-                                msg=f'Recording locally available in {path} '
-                                    f'for {keep_file_time} seconds')
+                    log.info(LOGGER_OBJECT_DETECTION_ASYNC_RECORD_VIDEO,
+                             msg=f'Recording locally available in {path} '
+                                 f'for {keep_file_time} seconds')
                     await asyncio.sleep(keep_file_time)
                     os.remove(path)
                     log.info(LOGGER_OBJECT_DETECTION_ASYNC_RECORD_VIDEO,
@@ -643,16 +674,99 @@ class ObjectDetector(object):
             raise Exception(f'Error in async_record_video : '
                             f'{traceback.print_exc()}')
 
+    async def async_save_picture(self,
+                                 obj_class=None,
+                                 include_visualisation_data=False) -> None:
+        """
+        Description : will save a picture and upload it to cloud. Will
+            delete temporary file for picture.
+        Args:
+            obj_class : if set, will automatically upload file to the
+                proper remote directory structure for retraining
+            include_visualisation_data : boolean, will show distance, object
+                class, etc., if set to true. If not, it will be the raw image.
+        """
+        keep_file_time = 60
+        try:
+            start_time = time.time()
+            # Create temp dir
+            with tempfile.TemporaryDirectory() as tmpdirname:
+                # Create temp file
+                local_file_path = os.path.join(
+                    tmpdirname,
+                    next(tempfile._get_candidate_names()) + self.__image_file_extension)
+                log.warning(LOGGER_OBJECT_DETECTION_ASYNC_SAVE_PICTURE,
+                            msg=f'Created file {local_file_path} to store temp '
+                                f'picture. Res = '
+                                f'{self.display_image_resolution}')
+                try:
+                    log.warning(LOGGER_OBJECT_DETECTION_ASYNC_SAVE_PICTURE,
+                                msg=f'Saving picture to {local_file_path}.')
+                    if include_visualisation_data:
+                        img = self.resized_im_for_video
+                    else:
+                        img = self.bgra_image_color_np[:, :, :3]
+                    cv2.imwrite(local_file_path, img)
+                    # image_to_save = Image.fromarray(self.rgb_image_color_np)
+                    # image_to_save.save(local_file_path)
+                except Exception:
+                    raise Exception()
+                finally:
+                    log.debug(LOGGER_OBJECT_DETECTION_ASYNC_SAVE_PICTURE,
+                              msg=f'Picture saved.')
+                path = shutil.copy(local_file_path, os.path.join(os.getcwd()))
+                try:
+                    filename = local_file_path.split('/')[-1]
+                    target_filename = os.path.join(
+                        datetime.datetime.now().strftime("%Y/%m/%d/%H"),
+                        filename)
+                    await self.async_upload_file_to_azure(
+                        container_name=self.__images_cloud_container,
+                        local_file_path=filename,
+                        target_blob_filename=target_filename,
+                        content_type=self.__image_content_type)
+                    log.info(LOGGER_OBJECT_DETECTION_ASYNC_SAVE_PICTURE,
+                             msg=f'Picture locally available in {path} '
+                                 f'for {keep_file_time} seconds')
+                    await asyncio.sleep(keep_file_time)
+                    os.remove(path)
+                    log.info(LOGGER_OBJECT_DETECTION_ASYNC_SAVE_PICTURE,
+                             msg=f'Deleted {path}.')
+                except asyncio.futures.CancelledError:
+                    log.warning(LOGGER_OBJECT_DETECTION_ASYNC_SAVE_PICTURE,
+                                msg=f'Cancelled the picture saving during '
+                                    f'pause. Will need to clean up.')
+                    raise asyncio.futures.CancelledError()
+                except:
+                    log.error(LOGGER_OBJECT_DETECTION_ASYNC_SAVE_PICTURE,
+                              msg=f'Uncaught Exception. Details = '
+                                  f'{traceback.print_exc()}')
+            duration = time.time() - start_time
+            log.debug(LOGGER_OBJECT_DETECTION_ASYNC_SAVE_PICTURE,
+                      msg=f'Snapping and upload of picture took {duration:.3f}s')
+        except asyncio.futures.CancelledError:
+            log.warning(LOGGER_OBJECT_DETECTION_ASYNC_SAVE_PICTURE,
+                        msg=f'Cancelled the picture saving task.')
+        except:
+            log.error(LOGGER_OBJECT_DETECTION_ASYNC_SAVE_PICTURE,
+                      msg=f'Error in async_save_picture : '
+                          f'{traceback.print_exc()}')
+            raise Exception(f'Error in async_save_picture : '
+                            f'{traceback.print_exc()}')
+
     async def async_upload_file_to_azure(self,
                                          container_name: str,
-                                         local_blob_path: str,
+                                         local_file_path: str,
+                                         target_blob_filename: str,
                                          content_type: str) -> None:
         """
         Description :
             Sends file to cloud. Files could be video, or photos, or others
         Args:
             container_name : str, container name to be created in Azure
-            local_blob_path : str, absolute path of object to be uploaded
+            local_file_path : str, absolute path of object to be uploaded
+            target_blob_filename : str, target of the blob on Azure. / will be
+                intepreted as a directory.
             content_type: str, mimetype, of file being uploaded, video/x-msvideo
         Returns :
             Sucess or None if failed.
@@ -699,22 +813,22 @@ class ObjectDetector(object):
                     log.warning(
                         LOGGER_OBJECT_DETECTION_ASYNC_UPLOAD_FILE_TO_AZURE,
                         msg=f'Container {container_name} created.')
-                filename = local_blob_path.split('/')[-1]
-                target_filename = os.path.join(
-                    datetime.datetime.now().strftime("%Y/%m/%d/%H"),
-                    filename)
-                blob_client = container_client.get_blob_client(target_filename)
+                # filename = local_file_path.split('/')[-1]
+                # target_filename = os.path.join(
+                #     datetime.datetime.now().strftime("%Y/%m/%d/%H"),
+                #     filename)
+                blob_client = container_client.get_blob_client(target_blob_filename)
                 log.warning(LOGGER_OBJECT_DETECTION_ASYNC_UPLOAD_FILE_TO_AZURE,
-                            msg=f'Uploading local file {local_blob_path} to '
-                                f'blob {target_filename} in container '
+                            msg=f'Uploading local file {local_file_path} to '
+                                f'blob {target_blob_filename} in container '
                                 f'{container_name}.')
                 try:
                     metadata = {
                         'create_time': datetime.datetime.now().strftime(
                             "%Y-%m-%d %H:%M:%S.%f"),
-                        'type': 'video_file'
+                        'type': 'content_type'
                     }
-                    with open(local_blob_path, 'rb') as data:
+                    with open(local_file_path, 'rb') as data:
                         await blob_client.upload_blob(
                             data,
                             blob_type='BlockBlob',
