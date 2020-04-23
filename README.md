@@ -20,9 +20,9 @@ Outstanding issues:
     - [X] ~~Save to temp file~~
 - [ ] Move cloud uploader to other class...?
 - [ ] Move cloud uploader to other class...?
-- [ ] Make the robot work without web scoring and without crashing.
 
 Solved issues:
+- [X] ~~Make the robot work without web scoring and without crashing.~~
 - [X] ~~Troubleshoot why video file format from XVID/AVI container won't read in browser - files generated in devcontainer work... but not in application...~~
 - [X] ~~Ability to record video:~~
 - [X] ~~Troubleshoot why video file format from XVID/AVI container won't read in browser - files generated in devcontainer work... but not in application...~~
