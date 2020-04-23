@@ -649,9 +649,9 @@ class ObjectDetector(object):
                         local_file_path=filename,
                         target_blob_filename=target_filename,
                         content_type=self.__video_content_type)
-                    log.warning(LOGGER_OBJECT_DETECTION_ASYNC_RECORD_VIDEO,
-                                msg=f'Recording locally available in {path} '
-                                    f'for {keep_file_time} seconds')
+                    log.info(LOGGER_OBJECT_DETECTION_ASYNC_RECORD_VIDEO,
+                             msg=f'Recording locally available in {path} '
+                                 f'for {keep_file_time} seconds')
                     await asyncio.sleep(keep_file_time)
                     os.remove(path)
                     log.info(LOGGER_OBJECT_DETECTION_ASYNC_RECORD_VIDEO,
@@ -725,9 +725,9 @@ class ObjectDetector(object):
                         local_file_path=filename,
                         target_blob_filename=target_filename,
                         content_type=self.__image_content_type)
-                    log.warning(LOGGER_OBJECT_DETECTION_ASYNC_SAVE_PICTURE,
-                                msg=f'Picture locally available in {path} '
-                                    f'for {keep_file_time} seconds')
+                    log.info(LOGGER_OBJECT_DETECTION_ASYNC_SAVE_PICTURE,
+                             msg=f'Picture locally available in {path} '
+                                 f'for {keep_file_time} seconds')
                     await asyncio.sleep(keep_file_time)
                     os.remove(path)
                     log.info(LOGGER_OBJECT_DETECTION_ASYNC_SAVE_PICTURE,
