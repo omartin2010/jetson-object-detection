@@ -11,3 +11,4 @@ tasks.json
 **/*.png
 *.vsix
 *.avi
+.env.list

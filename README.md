@@ -17,16 +17,19 @@ Outstanding issues:
 - [X] Ability to save image (for future trainings):
     - [X] ~~Save to temp file~~
     - [X] ~~Upload to blob~~
-- [ ] Improve model - take more pictures
+    - [X] ~~Save to temp file~~
 - [ ] Move cloud uploader to other class...?
+- [ ] Move cloud uploader to other class...?
+- [ ] Make the robot work without web scoring and without crashing.
 
 Solved issues:
-
 - [X] ~~Troubleshoot why video file format from XVID/AVI container won't read in browser - files generated in devcontainer work... but not in application...~~
 - [X] ~~Ability to record video:~~
-    - [X] ~~Save to temp file~~
+- [X] ~~Troubleshoot why video file format from XVID/AVI container won't read in browser - files generated in devcontainer work... but not in application...~~
     - [X] ~~Upload to blob in proper structure (/date/...)~~
     - [X] ~~Use logic app to send to onedrive if need be~~
+- [X] ~~Move video display to its own task~~
+- [X] ~~Modify the mqtt processing for setting logging level so that dict can be:~~</br>
 - [X] ~~Move video display to its own task~~
 - [X] ~~Modify the mqtt processing for setting logging level so that dict can be:~~</br>
 ```

@@ -929,6 +929,10 @@ class ObjectDetector(object):
                                             f' service...')
                 # Pause for loopDelay seconds
                 await asyncio.sleep(self.time_between_scoring_service_calls)
+        except ConnectionRefusedError:
+            log.warning(LOGGER_ASYNC_RUN_DETECTION,
+                        msg=f'HTTP prediction service not responding. '
+                            f'Maybe at boot time? - sleeping and retrying.')
         except ServerDisconnectedError:
             log.error(LOGGER_ASYNC_RUN_DETECTION,
                       msg=f'HTTP prediction service error: '
