@@ -959,6 +959,8 @@ class ObjectDetector(object):
                         await asyncio.sleep(back_off_retry)
                     except Exception:
                         raise
+                    else:
+                        back_off_retry = 0
                 # Pause for loopDelay seconds
                 duration = time.time() - start_time
                 sleep_time = max(0, self.time_between_scoring_service_calls - duration)

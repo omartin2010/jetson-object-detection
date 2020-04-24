@@ -1,20 +1,9 @@
 # Robot Startup Outside VSCode
 There are two components of this to be run on this piece of hardware.
-1. Model Serving
+1. Model Serving - see other repo for details.
 2. Object Detector Robot Software
 
 Each of these startups are described below.
-
-## Model Serving
-Details on this are on another project related project.
-```
-docker run --restart unless-stopped --privileged -d \
-    --name modelserving \
-    --memory 2g \
-    --memory-swap 3g \
-    --network host \
-    modelserving:latest
-```
 
 ## Object Detector
 
