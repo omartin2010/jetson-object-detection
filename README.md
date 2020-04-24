@@ -20,6 +20,7 @@ Outstanding issues:
     - [X] ~~Save to temp file~~
 - [ ] Move cloud uploader to other class...?
 - [ ] Add code to protect from K4A failure - and recover without crashing... thing same as web scoring issue. See if that works
+- [ ] Fix exception handling all along
 
 Solved issues:
 - [X] ~~Make the robot work without web scoring and without crashing.~~

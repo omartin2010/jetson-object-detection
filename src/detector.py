@@ -70,19 +70,18 @@ class ObjectDetector(object):
         self.exception_queue = queue.Queue()        # PROBABLY NOT NEEDED
         self.ready_queue = queue.Queue()   # used to signal that there's an image ready for processing
         self.object_detection_result_queue = queue.Queue(maxsize=5)   # 5 allows for debugging...
-        # self.detection_result = {}
-        k4a_config_dict = self.configuration[OBJECT_DETECTOR_CONFIG_DICT]['k4a_device']
-        self.k4a_config = k4aConf(
-            color_resolution=k4a_config_dict['color_resolution'],
-            depth_mode=k4a_config_dict['depth_mode'],
-            camera_fps=k4a_config_dict['camera_fps'],
-            synchronized_images_only=k4a_config_dict['synchronized_images_only'])
-        self.k4a_device = PyK4A(self.k4a_config)
-        self.k4a_device_calibration = Calibration(
-            device=self.k4a_device,
-            config=self.k4a_config,
-            source_calibration=CalibrationType.COLOR,
-            target_calibration=CalibrationType.GYRO)
+        # k4a_config_dict = self.configuration[OBJECT_DETECTOR_CONFIG_DICT]['k4a_device']
+        # self.k4a_config = k4aConf(
+        #     color_resolution=k4a_config_dict['color_resolution'],
+        #     depth_mode=k4a_config_dict['depth_mode'],
+        #     camera_fps=k4a_config_dict['camera_fps'],
+        #     synchronized_images_only=k4a_config_dict['synchronized_images_only'])
+        # self.k4a_device = PyK4A(self.k4a_config)
+        # self.k4a_device_calibration = Calibration(
+        #     device=self.k4a_device,
+        #     config=self.k4a_config,
+        #     source_calibration=CalibrationType.COLOR,
+        #     target_calibration=CalibrationType.GYRO)
         self.category_index = self.configuration['object_classes']
         self._fourcc = cv2.VideoWriter_fourcc(*'MJPG')
         self.__video_file_extension = '.avi'
@@ -93,18 +92,18 @@ class ObjectDetector(object):
         self.started_threads = {}
         self.show_video = False
         self.show_depth_video = False
-        if k4a_config_dict['camera_fps'] == FPS.FPS_5:
-            self.frame_duration = 1. / 5
-            self.fps = 5
-        elif k4a_config_dict['camera_fps'] == FPS.FPS_15:
-            self.frame_duration = 1. / 15
-            self.fps = 15
-        elif k4a_config_dict['camera_fps'] == FPS.FPS_30:
-            self.frame_duration = 1. / 30
-            self.fps = 30
-        else:
-            raise Exception('Unsupported frame rate {}'.format(
-                            k4a_config_dict['camera_fps']))
+        # if k4a_config_dict['camera_fps'] == FPS.FPS_5:
+        #     self.frame_duration = 1. / 5
+        #     self.fps = 5
+        # elif k4a_config_dict['camera_fps'] == FPS.FPS_15:
+        #     self.frame_duration = 1. / 15
+        #     self.fps = 15
+        # elif k4a_config_dict['camera_fps'] == FPS.FPS_30:
+        #     self.frame_duration = 1. / 30
+        #     self.fps = 30
+        # else:
+        #     raise Exception('Unsupported frame rate {}'.format(
+        #                     k4a_config_dict['camera_fps']))
         self.detection_threshold = self.configuration[OBJECT_DETECTOR_CONFIG_DICT]['detection_threshold']
         self.resized_image_resolution = tuple(configuration[OBJECT_DETECTOR_CONFIG_DICT]['resized_resolution'])
         self.display_image_resolution = tuple(configuration[OBJECT_DETECTOR_CONFIG_DICT]['display_resolution'])
@@ -218,7 +217,7 @@ class ObjectDetector(object):
                          msg=f'Disconnected K4A camera')
             except:
                 log.error(LOGGER_OBJECT_DETECTION_SOFTSHUTDOWN,
-                          msg=f'Exception in shutting down K4A')
+                          msg=f'Exception shutting down K4A')
 
         except:
             log.error(LOGGER_OBJECT_DETECTION_SOFTSHUTDOWN,
@@ -234,11 +233,11 @@ class ObjectDetector(object):
         Launches the runner that runs most things (MQTT queue, etc.)
         """
         try:
-            log.warning(LOGGER_OBJECT_DETECTOR_RUNNER,
-                        msg=f'Initializing Kinect')
-            self.k4a_device.connect()
-            log.warning(LOGGER_OBJECT_DETECTOR_RUNNER,
-                        msg=f'K4A device initialized...')
+            # log.warning(LOGGER_OBJECT_DETECTOR_RUNNER,
+            #             msg=f'Initializing Kinect')
+            # self.k4a_device.connect()
+            # log.warning(LOGGER_OBJECT_DETECTOR_RUNNER,
+            #             msg=f'K4A device initialized...')
 
             # Launch the MQTT thread listener
             log.warning(LOGGER_OBJECT_DETECTOR_RUNNER,
@@ -490,62 +489,114 @@ class ObjectDetector(object):
                 process it's time to end.
         """
         try:
-            # Launch the loop
-            n_loops = 0
-            logging_loops = 50
-            average_duration = 0
-            k4a_errors = 0
-            while not exit_thread_event.is_set():
-                start_time = time.time()
-                # Read frame from camera
+            log.warning(LOGGER_OBJECT_DETECTOR_RUNNER,
+                        msg=f'Initializing Kinect Thread')
+            k4a_config_dict = self.configuration[OBJECT_DETECTOR_CONFIG_DICT]['k4a_device']
+            self.k4a_config = k4aConf(
+                color_resolution=k4a_config_dict['color_resolution'],
+                depth_mode=k4a_config_dict['depth_mode'],
+                camera_fps=k4a_config_dict['camera_fps'],
+                synchronized_images_only=k4a_config_dict['synchronized_images_only'])
+            if k4a_config_dict['camera_fps'] == FPS.FPS_5:
+                self.frame_duration = 1. / 5
+                self.fps = 5
+            elif k4a_config_dict['camera_fps'] == FPS.FPS_15:
+                self.frame_duration = 1. / 15
+                self.fps = 15
+            elif k4a_config_dict['camera_fps'] == FPS.FPS_30:
+                self.frame_duration = 1. / 30
+                self.fps = 30
+            else:
+                raise Exception('Unsupported frame rate {}'.format(
+                                k4a_config_dict['camera_fps']))
+        except:
+            raise
+        while not exit_thread_event.is_set():
+            try:
+                self.k4a_device = PyK4A(self.k4a_config)
+                self.k4a_device.connect()
+                log.warning(LOGGER_OBJECT_DETECTOR_RUNNER,
+                            msg=f'K4A device initialized.')
+                self.k4a_device_calibration = Calibration(
+                    device=self.k4a_device,
+                    config=self.k4a_config,
+                    source_calibration=CalibrationType.COLOR,
+                    target_calibration=CalibrationType.GYRO)
+
+                # Stats counters for the loop
+                n_loops = 0
+                logging_loops = 50
+                average_duration = 0
+                k4a_errors = 0
+
+                # Launch the capture loop
+                while not exit_thread_event.is_set():
+                    start_time = time.time()
+                    # Read frame from camera
+                    try:
+                        self.bgra_image_color_np, image_depth_np = \
+                            self.k4a_device.get_capture(
+                                color_only=False,
+                                transform_depth_to_color=True)
+                        self.rgb_image_color_np = self.bgra_image_color_np[:, :, :3][..., ::-1]
+                        self.rgb_image_color_np_resized = np.asarray(
+                            Image.fromarray(self.rgb_image_color_np).resize(
+                                self.resized_image_resolution))
+                        self.image_queue.publish(self.rgb_image_color_np_resized)
+                        self.image_depth_np_resized = np.asarray(
+                            Image.fromarray(image_depth_np).resize(
+                                self.resized_image_resolution,
+                                resample=Image.NEAREST))
+                        # only do this after the first loop is done
+                        if n_loops == 0:
+                            self.ready_queue.put_nowait('image_ready')
+                        # retrieve and update distance to each tracked object
+                        with self.lock_tracked_objects_mp:
+                            self.__get_distance_from_k4a()
+                        # Visualization of the results of a detection.
+                        img = self.bgra_image_color_np[:, :, :3]
+                        with self.lock_tracked_objects_mp:
+                            img = self.__update_image_with_info(img)
+                        resized_im = cv2.resize(img, self.display_image_resolution)
+                        self.resized_im_for_video = resized_im.copy()
+                        self.image_depth_np = image_depth_np.copy()
+                        duration = time.time() - start_time
+                        average_duration += duration
+                        n_loops += 1
+                        if n_loops % logging_loops == 0:
+                            duration_50 = average_duration
+                            average_duration /= 50
+                            log.debug(LOGGER_ASYNC_RUN_CAPTURE_LOOP,
+                                      msg=f'Ran 50 in {duration_50:.2f}s - '
+                                          f'{average_duration:.2f}s/loop '
+                                          f'or {1/average_duration:.2f} '
+                                          f'loop/sec')
+                            average_duration = 0
+                    except K4AException as err:
+                        # count problematic frame capture
+                        k4a_errors += 1
+                        log.critical(LOGGER_ASYNC_RUN_CAPTURE_LOOP,
+                                     msg=f'Error count: {k4a_errors} - '
+                                         f'traceback={traceback.print_exc()} '
+                                         f'Err = {err}')
+                        if k4a_errors > 5:
+                            raise K4AException
+            except K4AException as err:
                 try:
-                    self.bgra_image_color_np, image_depth_np = \
-                        self.k4a_device.get_capture(
-                            color_only=False,
-                            transform_depth_to_color=True)
-                except K4AException as err:
-                    k4a_errors += 1         # count problematic frame capture
                     log.critical(LOGGER_ASYNC_RUN_CAPTURE_LOOP,
-                                 msg=f'Error count: {k4a_errors} - '
-                                     f'traceback = {traceback.print_exc()} '
-                                     f'Err = {err}')
-                    if k4a_errors > 5:
-                        raise K4AException('Too many errors. Quitting.')
-                self.rgb_image_color_np = self.bgra_image_color_np[:, :, :3][..., ::-1]
-                self.rgb_image_color_np_resized = np.asarray(
-                    Image.fromarray(self.rgb_image_color_np).resize(
-                        self.resized_image_resolution))
-                self.image_queue.publish(self.rgb_image_color_np_resized)
-                self.image_depth_np_resized = np.asarray(
-                    Image.fromarray(image_depth_np).resize(
-                        self.resized_image_resolution,
-                        resample=Image.NEAREST))
-                # only do this after the first loop is done
-                if n_loops == 0:
-                    self.ready_queue.put_nowait('image_ready')
-                # retrieve and update distance to each tracked object
-                with self.lock_tracked_objects_mp:
-                    self.__get_distance_from_k4a()
-                # Visualization of the results of a detection.
-                img = self.bgra_image_color_np[:, :, :3]
-                with self.lock_tracked_objects_mp:
-                    img = self.__update_image_with_info(img)
-                resized_im = cv2.resize(img, self.display_image_resolution)
-                self.resized_im_for_video = resized_im.copy()
-                self.image_depth_np = image_depth_np.copy()
-                duration = time.time() - start_time
-                average_duration += duration
-                n_loops += 1
-                if n_loops % logging_loops == 0:
-                    duration_50 = average_duration
-                    average_duration /= 50
-                    log.debug(LOGGER_ASYNC_RUN_CAPTURE_LOOP,
-                              msg=f'Ran 50 in {duration_50:.2f}s - {average_duration:.2f}s/loop or {1/average_duration:.2f} loop/sec')
-                    average_duration = 0
-        except Exception:
-            log.error(LOGGER_ASYNC_RUN_CAPTURE_LOOP,
-                      f'Error : {traceback.print_exc()}')
-            raise Exception(f'Error : {traceback.print_exc()}')
+                                 msg=f'Error count too high ({k4a_errors}) '
+                                     f'Trying to disconnect device:{err}')
+                    self.k4a_device.disconnect()
+                    log.critical(LOGGER_OBJECT_DETECTION_SOFTSHUTDOWN,
+                                 msg=f'Disconnected K4A camera - will try '
+                                     f'reinitializing it now.')
+                    k4a_errors = 0
+                except K4AException:
+                    log.error(LOGGER_OBJECT_DETECTION_SOFTSHUTDOWN,
+                              msg=f'Unable to disconnect K4A')
+                    raise K4AException
+            except Exception:
+                raise
 
     async def async_display_video(self) -> None:
         """
