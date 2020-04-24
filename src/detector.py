@@ -939,6 +939,7 @@ class ObjectDetector(object):
                                     msg=f'Cannot connect to http://{err.host}'
                                         f':{err.port}. Retrying in '
                                         f'{back_off_retry} secs.')
+                        await asyncio.sleep(back_off_retry)
                     except ConnectionRefusedError:
                         if back_off_retry + 5 <= 60:
                             back_off_retry += 5
@@ -946,6 +947,7 @@ class ObjectDetector(object):
                                     msg=f'Connection to {model_url} refused. '
                                         f'Retying in {back_off_retry} '
                                         f'seconds')
+                        await asyncio.sleep(back_off_retry)
                     except ServerDisconnectedError:
                         if back_off_retry + 5 <= 60:
                             back_off_retry += 5
@@ -954,10 +956,9 @@ class ObjectDetector(object):
                                       f'{traceback.print_exc()} -> sleeping '
                                       f'{self.time_between_scoring_service_calls}s '
                                       f'and continuing')
+                        await asyncio.sleep(back_off_retry)
                     except Exception:
                         raise
-                    finally:
-                        await asyncio.sleep(back_off_retry)
                 # Pause for loopDelay seconds
                 duration = time.time() - start_time
                 sleep_time = max(0, self.time_between_scoring_service_calls - duration)
