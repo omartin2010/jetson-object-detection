@@ -45,7 +45,8 @@ from constant import LOGGER_OBJECT_DETECTOR_MAIN, \
     LOGGER_OBJECT_DETECTION_ASYNC_SAVE_PICTURE, \
     LOGGER_OBJECT_DETECTION_GET_DISTANCE_FROM_K4A, \
     LOGGER_OBJECT_DETECTION_ASYNC_DISPLAY_VIDEO, \
-    LOGGER_OBJECT_DETECTION_ASYNC_UPLOAD_FILE_TO_AZURE
+    LOGGER_OBJECT_DETECTION_ASYNC_UPLOAD_FILE_TO_AZURE, \
+    LOGGER_OBJECT_DETECTION_ASYNC_WATCHDOG
 from logger import RoboLogger
 from tracked_object import BoundingBox, TrackedObjectMP, \
     FMT_TF_BBOX, UNDETECTED, UNSEEN, UNSTABLE
@@ -70,18 +71,6 @@ class ObjectDetector(object):
         self.exception_queue = queue.Queue()        # PROBABLY NOT NEEDED
         self.ready_queue = queue.Queue()   # used to signal that there's an image ready for processing
         self.object_detection_result_queue = queue.Queue(maxsize=5)   # 5 allows for debugging...
-        # k4a_config_dict = self.configuration[OBJECT_DETECTOR_CONFIG_DICT]['k4a_device']
-        # self.k4a_config = k4aConf(
-        #     color_resolution=k4a_config_dict['color_resolution'],
-        #     depth_mode=k4a_config_dict['depth_mode'],
-        #     camera_fps=k4a_config_dict['camera_fps'],
-        #     synchronized_images_only=k4a_config_dict['synchronized_images_only'])
-        # self.k4a_device = PyK4A(self.k4a_config)
-        # self.k4a_device_calibration = Calibration(
-        #     device=self.k4a_device,
-        #     config=self.k4a_config,
-        #     source_calibration=CalibrationType.COLOR,
-        #     target_calibration=CalibrationType.GYRO)
         self.category_index = self.configuration['object_classes']
         self._fourcc = cv2.VideoWriter_fourcc(*'MJPG')
         self.__video_file_extension = '.avi'
@@ -92,18 +81,6 @@ class ObjectDetector(object):
         self.started_threads = {}
         self.show_video = False
         self.show_depth_video = False
-        # if k4a_config_dict['camera_fps'] == FPS.FPS_5:
-        #     self.frame_duration = 1. / 5
-        #     self.fps = 5
-        # elif k4a_config_dict['camera_fps'] == FPS.FPS_15:
-        #     self.frame_duration = 1. / 15
-        #     self.fps = 15
-        # elif k4a_config_dict['camera_fps'] == FPS.FPS_30:
-        #     self.frame_duration = 1. / 30
-        #     self.fps = 30
-        # else:
-        #     raise Exception('Unsupported frame rate {}'.format(
-        #                     k4a_config_dict['camera_fps']))
         self.detection_threshold = self.configuration[OBJECT_DETECTOR_CONFIG_DICT]['detection_threshold']
         self.resized_image_resolution = tuple(configuration[OBJECT_DETECTOR_CONFIG_DICT]['resized_resolution'])
         self.display_image_resolution = tuple(configuration[OBJECT_DETECTOR_CONFIG_DICT]['display_resolution'])
@@ -174,15 +151,20 @@ class ObjectDetector(object):
                           msg=f'Exception in shutting down MQTT')
 
             # Stop pool manager thread first
-            event = self.started_threads[self.object_detection_pool_manager_thread]
-            if self.object_detection_pool_manager_thread.is_alive():
-                event.set()
-                await asyncio.sleep(0.5)
+            try:
+                event = self.started_threads[self.object_detection_pool_manager_thread]
                 if self.object_detection_pool_manager_thread.is_alive():
-                    log.error(LOGGER_OBJECT_DETECTION_SOFTSHUTDOWN,
-                              msg=f'Problem shutting down '
-                                  f'pool manager thread!')
-            self.started_threads.pop(self.object_detection_pool_manager_thread)
+                    event.set()
+                    await asyncio.sleep(0.5)
+                    if self.object_detection_pool_manager_thread.is_alive():
+                        log.error(LOGGER_OBJECT_DETECTION_SOFTSHUTDOWN,
+                                  msg=f'Problem shutting down '
+                                      f'pool manager thread!')
+                self.started_threads.pop(self.object_detection_pool_manager_thread)
+            except:
+                log.error(LOGGER_OBJECT_DETECTION_SOFTSHUTDOWN,
+                          msg=f'Exception in shutting the pool manager '
+                              f'thread')
 
             # Stop object watchers
             try:
@@ -233,23 +215,17 @@ class ObjectDetector(object):
         Launches the runner that runs most things (MQTT queue, etc.)
         """
         try:
-            # log.warning(LOGGER_OBJECT_DETECTOR_RUNNER,
-            #             msg=f'Initializing Kinect')
-            # self.k4a_device.connect()
-            # log.warning(LOGGER_OBJECT_DETECTOR_RUNNER,
-            #             msg=f'K4A device initialized...')
-
             # Launch the MQTT thread listener
             log.warning(LOGGER_OBJECT_DETECTOR_RUNNER,
                         msg='Launching MQTT thread.')
             self.threadMQTT = threading.Thread(
-                target=self.thread_mqtt_listener, name='MQTTListener')
+                target=self.thread_mqtt_listener, name='thread_mqtt_listener')
             self.threadMQTT.start()
             self.started_threads[self.threadMQTT] = None
 
             # Launch event loop tasks in the main thread
             log.warning(LOGGER_OBJECT_DETECTOR_RUNNER,
-                        msg='Launching asyncio tasks...')
+                        msg='Launching asyncio tasks')
             self.event_loop_start_main_tasks()
 
             # Launching capture loop thread
@@ -259,7 +235,7 @@ class ObjectDetector(object):
             self.capture_loop_thread = threading.Thread(
                 target=self.thread_capture_loop,
                 args=([exit_capture_thread_event]),
-                name='captureLoop')
+                name='thread_capture_loop')
             self.capture_loop_thread.start()
             self.started_threads[self.capture_loop_thread] = exit_capture_thread_event
 
@@ -271,14 +247,26 @@ class ObjectDetector(object):
             self.object_detection_pool_manager_thread = threading.Thread(
                 target=self.thread_object_detection_pool_manager,
                 args=([exit_detection_pool_manager_thread_event, 0.25]),
-                name='objectDetectionManager')
+                name='thread_object_detection_pool_manager')
             self.object_detection_pool_manager_thread.start()
             self.started_threads[self.object_detection_pool_manager_thread] = \
                 exit_detection_pool_manager_thread_event
 
-        except SystemExit:
-            # raise the exception up the stack
-            raise Exception(f'Error : {traceback.print_exc()}')
+            # Create a list of tasks that need to be constantly running (used by watchdog)
+            self.critical_asyncio_tasks = [
+                self.async_process_mqtt_messages_task,
+                self.async_run_detection_task,
+                self.async_run_display_video_task]
+
+            self.critical_threads = [
+                self.threadMQTT,
+                self.capture_loop_thread,
+                self.object_detection_pool_manager_thread
+            ]
+            log.info(LOGGER_OBJECT_DETECTOR_RUNNER,
+                     msg=f'Launching asyncio TASK: "async_watchdog"')
+            self.eventLoop.create_task(
+                self.async_watchdog(watchdog_timer=5))
 
         except K4AException:
             log.error(LOGGER_OBJECT_DETECTOR_RUNNER,
@@ -309,7 +297,7 @@ class ObjectDetector(object):
 
             log.info(LOGGER_OBJECT_DETECTOR_ASYNC_LOOP,
                      msg=f'Launching asyncio TASK : "async_display_video"')
-            self.async_run_detection_task = \
+            self.async_run_display_video_task = \
                 self.eventLoop.create_task(
                     self.async_display_video())
             # endregion
@@ -513,6 +501,8 @@ class ObjectDetector(object):
             raise
         while not exit_thread_event.is_set():
             try:
+                log.warning(LOGGER_OBJECT_DETECTOR_RUNNER,
+                            msg=f'Attempting to initialize K4A device.')
                 self.k4a_device = PyK4A(self.k4a_config)
                 self.k4a_device.connect()
                 log.warning(LOGGER_OBJECT_DETECTOR_RUNNER,
@@ -522,12 +512,18 @@ class ObjectDetector(object):
                     config=self.k4a_config,
                     source_calibration=CalibrationType.COLOR,
                     target_calibration=CalibrationType.GYRO)
-
+            except K4AException:
+                log.critical(LOGGER_OBJECT_DETECTOR_RUNNER,
+                             msg=f'Unable to initialize K4A device.')
+                raise
+            try:
                 # Stats counters for the loop
                 n_loops = 0
                 logging_loops = 50
                 average_duration = 0
                 k4a_errors = 0
+                max_ka4_errors = 5
+                restart_delay_on_k4a_crash = 5
 
                 # Launch the capture loop
                 while not exit_thread_event.is_set():
@@ -572,31 +568,64 @@ class ObjectDetector(object):
                                           f'or {1/average_duration:.2f} '
                                           f'loop/sec')
                             average_duration = 0
-                    except K4AException as err:
+                    except K4AException:
                         # count problematic frame capture
                         k4a_errors += 1
                         log.critical(LOGGER_ASYNC_RUN_CAPTURE_LOOP,
-                                     msg=f'Error count: {k4a_errors} - '
-                                         f'traceback={traceback.print_exc()} '
-                                         f'Err = {err}')
-                        if k4a_errors > 5:
+                                     msg=f'Error count: {k4a_errors}')
+                        if k4a_errors >= max_ka4_errors:
                             raise K4AException
-            except K4AException as err:
+            except K4AException:
                 try:
                     log.critical(LOGGER_ASYNC_RUN_CAPTURE_LOOP,
                                  msg=f'Error count too high ({k4a_errors}) '
-                                     f'Trying to disconnect device:{err}')
+                                     f'Trying to disconnect device')
+                    k4a_errors = 0
                     self.k4a_device.disconnect()
+                    self.k4a_device = None
                     log.critical(LOGGER_OBJECT_DETECTION_SOFTSHUTDOWN,
                                  msg=f'Disconnected K4A camera - will try '
-                                     f'reinitializing it now.')
-                    k4a_errors = 0
+                                     f'reinitializing it now - pausing '
+                                     f'{restart_delay_on_k4a_crash}s before '
+                                     f'restart.')
+                    time.sleep(restart_delay_on_k4a_crash)
                 except K4AException:
                     log.error(LOGGER_OBJECT_DETECTION_SOFTSHUTDOWN,
                               msg=f'Unable to disconnect K4A')
                     raise K4AException
             except Exception:
                 raise
+
+    async def async_watchdog(self, watchdog_timer=5):
+        """
+        Description:
+            Watchdog Task : ensures there is a signal to kill the processes
+                if main processes/threads/tasks are not healthy.
+        Args:
+            watchdog_timer : float, seconds between loops
+        """
+        try:
+            while True:
+                for task in self.critical_asyncio_tasks:
+                    if task.done() or task.cancelled():
+                        raise Exception(f'Watchdog - Task {task} is '
+                                        f'cancelledor done. Need to '
+                                        f'stop robot')
+                for thread in self.critical_threads:
+                    if not thread.is_alive():
+                        raise Exception(f'Watchdog - Thread {thread.name} '
+                                        f'is dead. Need to stop robot')
+                log.warning(LOGGER_OBJECT_DETECTION_ASYNC_WATCHDOG,
+                            msg=f'Heartbeat OK - Checking again in '
+                                f'{watchdog_timer} seconds')
+                await asyncio.sleep(watchdog_timer)
+        except asyncio.futures.CancelledError:
+            log.warning(LOGGER_OBJECT_DETECTION_ASYNC_WATCHDOG,
+                        msg=f'Cancelled the watchdog task.')
+        except Exception:
+            log.critical(LOGGER_OBJECT_DETECTION_ASYNC_WATCHDOG,
+                         msg=f'Problem with critical task or thread. Need to quit')
+            raise
 
     async def async_display_video(self) -> None:
         """
@@ -1066,7 +1095,7 @@ class ObjectDetector(object):
                                               args=([new_object,
                                                      tracking_object_queue,
                                                      exit_thread_event]),
-                                              name=f'ObjTrack_{str(new_object_id)[:8]}')
+                                              name=f'thread_poll_object_tracking_{str(new_object_id)[:8]}')
                     # Keep track of what is under observation
                     self.tracked_objects_mp[new_object_id] = {
                         'tracked_object': new_object,

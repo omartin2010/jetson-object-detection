@@ -71,64 +71,72 @@ class ObjectTrackingProcess(Process):
             min_time_bw_identical_warnings = 1
             n_loops = 0
             n_queue_errors = 0
+            retry_timeout = 2
             new_bbox = None
             last_warning_message_time = time.time()
             while not self.exit.is_set():
                 start_time = time.time()
-                try:
-                    image = self.image_queue.get(block=True, timeout=2)
-                except queue.Empty:
-                    n_queue_errors += 1
-                    log.error(LOGGER_OBJECT_DETECTION_PROCESS_TRACK_OPENCV_OBJECT,
-                              msg=f'Empty image queue. Strange... Investigate')
-                    if n_queue_errors >= 5:
-                        log.critical(LOGGER_OBJECT_DETECTION_PROCESS_TRACK_OPENCV_OBJECT,
-                                     msg=f'Empty image queue for more than 5 loops : '
-                                         f'Exiting process.')
-                        self.exit.set()
-                height, width = image.shape[:2]
-                # Get new coordinates of a scored image (via TF model scoring)
-                try:
-                    new_bbox = None
-                    new_score = None
-                    new_class = None
-                    new_bbox, new_score, new_class = self.new_tf_info_queue.get_nowait()
-                    tracker = None
-                    tracker = OPENCV_OBJECT_TRACKERS[self.tracker_alg]()
-                    tracker.init(image, new_bbox.get_bbox())
-                    self.tracked_object.set_bbox(new_bbox)
-                    self.tracked_object.score = new_score
-                    self.tracked_object.object_class = new_class
-                    log.info(LOGGER_OBJECT_DETECTION_PROCESS_TRACK_OPENCV_OBJECT,
-                             msg=f'Obtained new bbox from tensorflow '
-                                 f'(object id = {str(self.tracked_object.id)[:8]})')
-                # If no TF scoring, queue is Empty ==> use tracker to find position
-                except queue.Empty:
-                    # Costly operation - update opencv tracker information
-                    (success, bbox) = tracker.update(image)
-                    if success:
-                        self.tracked_object.set_bbox(
-                            BoundingBox(
-                                box=bbox,
-                                image_height=height,
-                                image_width=width,
-                                fmt=FMT_TRACKER,
-                                use_normalized_coordinates=False))
-                        # fmt=FMT_TRACKER)
-                    elif new_bbox:
-                        now = time.time()
-                        if now - last_warning_message_time > min_time_bw_identical_warnings:
-                            last_warning_message_time = now
-                            log.warning(
-                                LOGGER_OBJECT_DETECTION_PROCESS_TRACK_OPENCV_OBJECT,
-                                msg=f'Trying to reinitialize tracker for obj '
-                                    f'{str(self.tracked_object.id)[:8]} '
-                                    f'with last bounding box info.')
-                        tracker = None
-                        tracker = OPENCV_OBJECT_TRACKERS[self.tracker_alg]()
-                        tracker.init(image, new_bbox.get_bbox())
-                except Exception:
-                    raise Exception(f'Problem : {traceback.print_exc()}')
+                image = None
+                while image is None:
+                    try:
+                        image = self.image_queue.get(
+                            block=True,
+                            timeout=retry_timeout)
+                    except queue.Empty:
+                        n_queue_errors += 1
+                        log.error(LOGGER_OBJECT_DETECTION_PROCESS_TRACK_OPENCV_OBJECT,
+                                  msg=f'Empty image queue. Retrying in '
+                                      f'{retry_timeout}s. Investigate '
+                                      f'video capture.')
+                        if n_queue_errors >= 5:
+                            log.critical(LOGGER_OBJECT_DETECTION_PROCESS_TRACK_OPENCV_OBJECT,
+                                         msg=f'Empty image queue for more '
+                                             f'than 5 loops. Exiting proc.')
+                            self.exit.set()
+                    else:
+                        height, width = image.shape[:2]
+                        # Get new coordinates of a scored image (via TF model scoring)
+                        try:
+                            new_bbox = None
+                            new_score = None
+                            new_class = None
+                            new_bbox, new_score, new_class = self.new_tf_info_queue.get_nowait()
+                            tracker = None
+                            tracker = OPENCV_OBJECT_TRACKERS[self.tracker_alg]()
+                            tracker.init(image, new_bbox.get_bbox())
+                            self.tracked_object.set_bbox(new_bbox)
+                            self.tracked_object.score = new_score
+                            self.tracked_object.object_class = new_class
+                            log.info(LOGGER_OBJECT_DETECTION_PROCESS_TRACK_OPENCV_OBJECT,
+                                     msg=f'Obtained new bbox from tensorflow '
+                                         f'(object id = {str(self.tracked_object.id)[:8]})')
+                        # If no TF scoring, queue is Empty ==> use tracker to find position
+                        except queue.Empty:
+                            # Costly operation - update opencv tracker information
+                            (success, bbox) = tracker.update(image)
+                            if success:
+                                self.tracked_object.set_bbox(
+                                    BoundingBox(
+                                        box=bbox,
+                                        image_height=height,
+                                        image_width=width,
+                                        fmt=FMT_TRACKER,
+                                        use_normalized_coordinates=False))
+                                # fmt=FMT_TRACKER)
+                            elif new_bbox:
+                                now = time.time()
+                                if now - last_warning_message_time > min_time_bw_identical_warnings:
+                                    last_warning_message_time = now
+                                    log.warning(
+                                        LOGGER_OBJECT_DETECTION_PROCESS_TRACK_OPENCV_OBJECT,
+                                        msg=f'Trying to reinitialize tracker for obj '
+                                            f'{str(self.tracked_object.id)[:8]} '
+                                            f'with last bounding box info.')
+                                tracker = None
+                                tracker = OPENCV_OBJECT_TRACKERS[self.tracker_alg]()
+                                tracker.init(image, new_bbox.get_bbox())
+                        except Exception:
+                            raise Exception(f'Problem : {traceback.print_exc()}')
                 # Dumping tracked_object to queue - unless exit flag unset
                 if not self.exit.is_set():
                     # put box, score and class not to overried other metadata held in other process

@@ -28,6 +28,7 @@ LOGGER_OBJECT_DETECTION_PUBLISH_QUEUES_UNREGISTER = 'obj_detector_publish_queue_
 LOGGER_OBJECT_DETECTION_PUBLISH_QUEUES_REGISTER = 'obj_detector_publish_queue_register'
 LOGGER_OBJECT_DETECTION_ASYNC_DISPLAY_VIDEO = 'obj_detector_async_display_video'
 LOGGER_OBJECT_DETECTION_ASYNC_UPLOAD_FILE_TO_AZURE = 'obj_detector_async_upload_file_to_azure'
+LOGGER_OBJECT_DETECTION_ASYNC_WATCHDOG = 'obj_detector_async_watchdog'
 # endregion
 
 K4A_DEFINITIONS = {
