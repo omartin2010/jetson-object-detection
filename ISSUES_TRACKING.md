@@ -3,9 +3,12 @@
 - [ ] Tracking Stability :
     - [ ] Find a way to remove dangling processes (maybe garbage collecting some unused queues...???)
     - [ ] When removing physical objects, sometimes related python objects don't get purged. Need to add a field to track last TF object detection!
+    - [ ] When multiple objects are present and we are monitoring 1, make sure we're preferring to keep that one versus moving to the next best object which may only have a score of 99.94% versus 99.8%, both of which are excellent. But this will avoir instability.
     - [ ] K4A crashes sometimes when I start monitoring multiple objects (which involves higher CPU usage and seems to trigger [this](https://github.com/microsoft/Azure-Kinect-Sensor-SDK/issues/1187) issue).
 - [X] Ability to save image (for future trainings):
     - [ ] Need to add ability to send to a storage account ready for labeling (not OneDrive, perhaps option of target in the parameters)
+- [ ] Add ability to stream video to facilitate headless operation - to move to the lego robot.
+- [ ] Test voltage/current with the battery for the Jetson and K4A camera both simultaneously
 - [ ] Move cloud uploader to other class...?
 - [ ] Fix exception handling all along
 
