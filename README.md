@@ -10,7 +10,7 @@ See [here](https://www.youtube.com/watch?v=w8ZtLOhuymo) for an actual example of
 
 Main features comprise :
 - [ ] Ability to record videos and photos of what the camera is seeing (the system is intended to be headless)
-- [ ] Uses Microsoft' Kinect for Azure (using this [Python binding](https://github.com/etiennedub/pyk4a))
+- [ ] Uses Microsoft's Kinect for Azure camera and SDK (using this [Python binding](https://github.com/etiennedub/pyk4a))
 - [ ] Combines with a EV3 Lego robot to give instructions to actually pick up objects
 - [ ] Uses MQTT to receive "orders". Current orders support : 
     - [ ] Video and picture upload to cloud (to Azure Blob) from the Kinect Camera
