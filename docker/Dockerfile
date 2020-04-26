@@ -1,4 +1,4 @@
-# Dockerfile. Tegra R32.3.1. Tensorflow 1.13 OpenCV 4.2.0 + K4a
+# Dockerfile. Tegra R32.3.1. OpenCV 4.2.0 + K4A
 FROM nvcr.io/nvidia/l4t-base:r32.3.1
 
 RUN apt-get update && \
@@ -10,7 +10,7 @@ RUN curl https://packages.microsoft.com/keys/microsoft.asc | apt-key add && \
     apt-add-repository https://packages.microsoft.com/ubuntu/18.04/multiarch/prod && \
     apt-get update
 
-# TF1.13
+# Prereqs for TF1.13
 RUN apt-get install -y \
     libhdf5-serial-dev \
     hdf5-tools \
@@ -132,8 +132,6 @@ RUN pip3 install git+https://github.com/etiennedub/pyk4a.git@develop
 RUN pip3 install azure-storage-blob==12.3.0 azure-identity
 
 WORKDIR /app
-# COPY src/utils /app/utils/
 COPY config.json /app
-# COPY model/label_map.pbtxt /app/model/label_map.pbtxt
 COPY src/*.py /app/
 CMD [ "/bin/sh", "-c", "python3 startup.py --config_file config.json"]
