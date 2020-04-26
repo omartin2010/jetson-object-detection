@@ -77,7 +77,7 @@ class ObjectTrackingProcess(Process):
             while not self.exit.is_set():
                 start_time = time.time()
                 image = None
-                while image is None:
+                while image is None and not self.exit.is_set():
                     try:
                         image = self.image_queue.get(
                             block=True,

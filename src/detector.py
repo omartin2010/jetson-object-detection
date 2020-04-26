@@ -4,6 +4,7 @@ import time
 import datetime
 import queue
 import os
+import sys
 import traceback
 import threading
 from copy import deepcopy
@@ -68,7 +69,7 @@ class ObjectDetector(object):
         self.num_classes = configuration[OBJECT_DETECTOR_CONFIG_DICT]['num_classes']
         self.label_map_path = configuration[OBJECT_DETECTOR_CONFIG_DICT]['label_map_path']
         self.mqtt_message_queue = queue.Queue()
-        self.exception_queue = queue.Queue()        # PROBABLY NOT NEEDED
+        self.thread_exception_queue = queue.Queue()
         self.ready_queue = queue.Queue()   # used to signal that there's an image ready for processing
         self.object_detection_result_queue = queue.Queue(maxsize=5)   # 5 allows for debugging...
         self.category_index = self.configuration['object_classes']
@@ -268,11 +269,6 @@ class ObjectDetector(object):
             self.eventLoop.create_task(
                 self.async_watchdog(watchdog_timer=5))
 
-        except K4AException:
-            log.error(LOGGER_OBJECT_DETECTOR_RUNNER,
-                      f'Error with K4A : {traceback.print_exc()}')
-            raise K4AException(f'Issue with K4A - Need to stop.')
-
         except Exception:
             log.error(LOGGER_OBJECT_DETECTOR_RUNNER,
                       f'Error : {traceback.print_exc()}')
@@ -371,12 +367,11 @@ class ObjectDetector(object):
             self.mqttClient.connect(host=self.configuration["mqtt"]["brokerIP"],
                                     port=self.configuration["mqtt"]["brokerPort"])
             self.mqttClient.loop_forever()
-            # self.mqttClient.loop_start()
         except Exception:
             log.error(LOGGER_OBJECT_DETECTOR_MQTT_LOOP,
                       f'Error : {traceback.print_exc()}')
-            # Bump up the problem...
-            raise Exception(f'Error : {traceback.print_exc()}')
+            # # Bump up the problem...
+            # self.thread_exception_queue.put('thread_mqtt_listener', sys.exc_info())
         finally:
             log.warning(LOGGER_OBJECT_DETECTOR_MQTT_LOOP,
                         msg=f'Exiting MQTT connection thread.')
@@ -498,7 +493,9 @@ class ObjectDetector(object):
                 raise Exception('Unsupported frame rate {}'.format(
                                 k4a_config_dict['camera_fps']))
         except:
-            raise
+            log.error(LOGGER_OBJECT_DETECTOR_RUNNER,
+                      msg=f'Error initializing Kinect Thread')
+            exit_thread_event.set()
         while not exit_thread_event.is_set():
             try:
                 log.warning(LOGGER_OBJECT_DETECTOR_RUNNER,
@@ -514,8 +511,10 @@ class ObjectDetector(object):
                     target_calibration=CalibrationType.GYRO)
             except K4AException:
                 log.critical(LOGGER_OBJECT_DETECTOR_RUNNER,
-                             msg=f'Unable to initialize K4A device.')
-                raise
+                             msg=f'Unable to initialize K4A device. Exiting thread.')
+                exit_thread_event.set()
+                break
+                # self.thread_exception_queue.put('thread_capture_loop', sys.exc_info())
             try:
                 # Stats counters for the loop
                 n_loops = 0
@@ -592,11 +591,18 @@ class ObjectDetector(object):
                 except K4AException:
                     log.error(LOGGER_OBJECT_DETECTION_SOFTSHUTDOWN,
                               msg=f'Unable to disconnect K4A')
-                    raise K4AException
+                    exit_thread_event.set()
+                    break
             except Exception:
-                raise
+                log.error(LOGGER_OBJECT_DETECTOR_RUNNER,
+                          msg=f'Error : {traceback.print_exc()}')
+                # self.thread_exception_queue.put('thread_capture_loop', sys.exc_info())
+        log.warning(LOGGER_OBJECT_DETECTOR_RUNNER,
+                    msg=f'Exiting thread_capture_loop thread. Should never '
+                        f'happen unless error or shutdown initiated.')
 
-    async def async_watchdog(self, watchdog_timer=5):
+    async def async_watchdog(self,
+                             watchdog_timer=5) -> None:
         """
         Description:
             Watchdog Task : ensures there is a signal to kill the processes
@@ -608,13 +614,27 @@ class ObjectDetector(object):
             while True:
                 for task in self.critical_asyncio_tasks:
                     if task.done() or task.cancelled():
-                        raise Exception(f'Watchdog - Task {task} is '
-                                        f'cancelledor done. Need to '
-                                        f'stop robot')
+                        raise Exception(f'Watchdog - Critical task {task} is '
+                                        f'cancelled or done. Need to stop '
+                                        f'robot')
                 for thread in self.critical_threads:
                     if not thread.is_alive():
-                        raise Exception(f'Watchdog - Thread {thread.name} '
-                                        f'is dead. Need to stop robot')
+                        raise Exception(f'Watchdog - Critical thread '
+                                        f'{thread.name} is stopped. Need to '
+                                        f'stop object detector.')
+                # Capture exceptions from threads as the run function has
+                # exited and is unable to catch errors
+                try:
+                    thread_exception = self.thread_exception_queue.get(block=False)
+                except queue.Empty:
+                    pass
+                else:
+                    thread_name, exc_type, exc_obj, exc_trace = thread_exception
+                    # deal with the exception raised in threads IF the threads
+                    # aren't terminating with the exception.
+                    raise Exception(f'thread_name : {thread_name} ; '
+                                    f'exc_type : {exc_type} ; '
+                                    f'exc_obj : {exc_obj} ; ')
                 log.warning(LOGGER_OBJECT_DETECTION_ASYNC_WATCHDOG,
                             msg=f'Heartbeat OK - Checking again in '
                                 f'{watchdog_timer} seconds')
@@ -1159,7 +1179,8 @@ class ObjectDetector(object):
                 log.info(LOGGER_OBJECT_DETECTION_OBJECT_DETECTION_POOL_MANAGER,
                          msg=f'Currently monitoring {len(self.tracked_objects_mp)} objects')
             except:
-                raise Exception(f'Problem : {traceback.print_exc()}')
+                self.thread_exception_queue.put('thread_object_detection_pool_manager', sys.exc_info())
+                # raise Exception(f'Problem : {traceback.print_exc()}')
         log.critical(LOGGER_OBJECT_DETECTION_OBJECT_DETECTION_POOL_MANAGER,
                      msg=f'Exiting thread "thread_object_detection_pool_manager". '
                          f'Should not happen unless stopping robot.')
@@ -1219,7 +1240,7 @@ class ObjectDetector(object):
 
                 # Remove from dict altogether
                 log.warning(LOGGER_OBJECT_DETECTION_KILL,
-                            msg=f'Adding object {obj_id} to removal list (for mapping dictionnary).')
+                            msg=f'Adding object {str(obj_id)[:8]} to removal list (for mapping dictionnary).')
                 list_uuids.append(obj_id)
 
                 # Unregister specific image_queue from PublisQueue
@@ -1281,7 +1302,7 @@ class ObjectDetector(object):
             raise Exception(f'Problem: {traceback.print_exc()}')
         finally:
             log.warning(LOGGER_OBJECT_DETECTION_THREAD_POLL_OBJECT_TRACKING_PROCESS_QUEUE,
-                        msg=f'Ending thread handling object {tracked_object_mp.id}')
+                        msg=f'Ending thread handling object {str(tracked_object_mp.id)[:8]}')
 
     def kill_switch(self):
         try:
