@@ -41,7 +41,6 @@ def main():
         log.warning(LOGGER_OBJECT_DETECTOR_STARTUP,
                     msg='Launching object detector now.')
         loop = asyncio.get_event_loop()
-        # loop.set_debug(enabled=True)
         loop.set_exception_handler(handle_exception)
         log.warning(LOGGER_OBJECT_DETECTOR_STARTUP,
                     msg='Launching runner.')
@@ -57,9 +56,8 @@ def main():
         log.info(LOGGER_OBJECT_DETECTOR_STARTUP, 'Caught SystemExit...')
     except Exception:
         log.critical(LOGGER_OBJECT_DETECTOR_STARTUP,
-                     'Crash in startup : {}'.format(traceback.print_exc()))
+                     'System Crash : {}'.format(traceback.print_exc()))
     finally:
-        # loop.stop()
         loop.close()
         logging.shutdown()
 

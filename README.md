@@ -5,21 +5,22 @@ A subset of a project to do object detection (toy detection really) on a Jetson 
 Insert IMAGE 1 - class = Similar to lego blocks <br>
 Insert IMAGE 2 - class = Rubik Cube <br>
 
-See [here](https://www.youtube.com/watch?v=w8ZtLOhuymo) for an actual example of a video recording of what it's doing. The idea is that this piece of software is to provide a robot the coordinates so that the robot can actually pick up and move these objects around.
+See [here](https://www.youtube.com/watch?v=w8ZtLOhuymo) for an actual example of a video recording of what the system is currently doing. The idea is that this piece of software is to provide a robot the coordinates so that the robot can actually pick up and move these objects around. Bounding boxes are not simply boxes, but tied to Python objects that are tracked as things move around.  
 
 Outstanding issues:
 
 - [ ] Tracking Stability :
     - [ ] Find a way to remove dangling processes (maybe garbage collecting some unused queues...???)
-    - [ ] sometimes, when I remove objects, it doesn't get removed... maybe it think it's tracked... need to refresh TF info regardless of tracker working!
+    - [ ] When removing physical objects, sometimes related python objects don't get purged. Need to add a field to track last TF object detection!
     - [ ] Add a system watchdog to monitor threads and processes and shutdown if important threads are failing... (like video capture)
-    - [ ] K4A crashes sometimes when I start monitoring two objects... investigate queues and locks...
+    - [ ] K4A crashes sometimes when I start monitoring two objects... investigate queues and locks... (related to )
 - [X] Ability to save image (for future trainings):
     - [X] ~~Save to temp file~~
     - [X] ~~Upload to blob~~
     - [X] ~~Save to temp file~~
 - [ ] Move cloud uploader to other class...?
 - [ ] Add code to protect from K4A failure - and recover without crashing... thing same as web scoring issue. See if that works
+- [ ] Fix exception handling all along
 
 Solved issues:
 - [X] ~~Make the robot work without web scoring and without crashing.~~
