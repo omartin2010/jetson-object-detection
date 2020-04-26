@@ -1,28 +1,41 @@
-# NVIDIA Jetson Object Detection
-Object Detection on Jetson TX2
-A subset of a project to do object detection (toy detection really) on a Jetson TX2 powered Lego Robot. For example, here are samples of the two classes of objects the model included in this repo can detect :<br>
+# NVIDIA Jetson TX2 Object Detection
+This is a subset of a (larger) project to do object detection (toy detection, really) on a Jetson TX2 powered Lego Robot. For example, here are samples of the two classes of objects the model included in this repo can detect :<br>
 <br>
 Insert IMAGE 1 - class = Similar to lego blocks <br>
 Insert IMAGE 2 - class = Rubik Cube <br>
 
-See [here](https://www.youtube.com/watch?v=w8ZtLOhuymo) for an actual example of a video recording of what the system is currently doing. The idea is that this piece of software is to provide a robot the coordinates so that the robot can actually pick up and move these objects around. Bounding boxes are not simply boxes, but tied to Python objects that are tracked as things move around.  
+See [here](https://www.youtube.com/watch?v=w8ZtLOhuymo) for an actual example of a video recording of what the system is currently doing. The idea is that this piece of software is to provide a robot the coordinates so that the robot can actually pick up and move these objects around. Bounding boxes are not simply boxes, but tied to Python objects that are tracked as things move around.
 
-Outstanding issues:
+### Features
+
+Main features comprise :
+- [ ] Ability to record videos and photos of what the camera is seeing (the system is intended to be headless)
+- [ ] Uses Microsoft' Kinect for Azure (using this [Python binding](https://github.com/etiennedub/pyk4a))
+- [ ] Combines with a EV3 Lego robot to give instructions to actually pick up objects
+- [ ] Uses MQTT to receive "orders". Current orders support : 
+    - [ ] Video and picture upload to cloud (to Azure Blob) from the Kinect Camera
+    - [ ] More to come - some are there for debugging purposes, or changing object properties on the fly without restarting container
+- [ ] Run fully containerized
+- [ ] Relies on Model Serving from [this project](https://github.com/omartin2010/jetson-model-serving). The model is built using Tensorflow Object Detection API. 
+
+### Outstanding issues:
 
 - [ ] Tracking Stability :
     - [ ] Find a way to remove dangling processes (maybe garbage collecting some unused queues...???)
     - [ ] When removing physical objects, sometimes related python objects don't get purged. Need to add a field to track last TF object detection!
-    - [ ] Add a system watchdog to monitor threads and processes and shutdown if important threads are failing... (like video capture)
-    - [ ] K4A crashes sometimes when I start monitoring two objects... investigate queues and locks... (related to )
+    - [ ] K4A crashes sometimes when I start monitoring multiple objects (which involves higher CPU usage and seems to trigger [this](https://github.com/microsoft/Azure-Kinect-Sensor-SDK/issues/1187) issue).
+- [X] Ability to save image (for future trainings):
+    - [ ] Need to add ability to send to a storage account ready for labeling (not OneDrive, perhaps option of target in the parameters)
+- [ ] Move cloud uploader to other class...?
+- [ ] Fix exception handling all along
+
+### Solved issues:
+
 - [X] Ability to save image (for future trainings):
     - [X] ~~Save to temp file~~
     - [X] ~~Upload to blob~~
     - [X] ~~Save to temp file~~
-- [ ] Move cloud uploader to other class...?
-- [ ] Add code to protect from K4A failure - and recover without crashing... thing same as web scoring issue. See if that works
-- [ ] Fix exception handling all along
-
-Solved issues:
+- [X] ~~Add code to protect from K4A failure - and recover without crashing... thing same as web scoring issue. See if that works~~
 - [X] ~~Make the robot work without web scoring and without crashing.~~
 - [X] ~~Troubleshoot why video file format from XVID/AVI container won't read in browser - files generated in devcontainer work... but not in application...~~
 - [X] ~~Ability to record video:~~
@@ -63,7 +76,8 @@ Traceback (most recent call last):
 - [X] ~~Figure out distance to object... and propagate it.~~
 - [X] ~~Updating not only tracking position but score as the TF scoring varies~~
 - [X] Stability : 
-    - [X] Distance can't be computed... need to understand why.
+    - [X] ~~Add a system watchdog to monitor threads and processes and shutdown if important threads are failing... (like video capture)~~
+    - [X] ~~Distance can't be computed... need to understand why.~~
     - [X] ~~Need to debug processes when there are 4-5 objects... seems to get confused.~~
     - [X] ~~Abiltity to track N objects~~
     - [X] ~~Validate that we can remove all objects and they dissapear~~
