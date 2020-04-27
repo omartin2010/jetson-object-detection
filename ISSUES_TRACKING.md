@@ -9,7 +9,9 @@
     - [ ] Need to add ability to send to a storage account ready for labeling (not OneDrive, perhaps option of target in the parameters)
 - [ ] Add ability to stream video to facilitate headless operation - to move to the lego robot.
 - [ ] Test voltage/current with the battery for the Jetson and K4A camera both simultaneously
-- [ ] Move cloud uploader to other class...?
+- [ ] Move stuff to other classes :
+    - [ ] Cloud Uploader
+    - [ ] MQTT communications
 - [ ] Fix exception handling all along
 - [ ] Add a function to cancel tasks//..... ? because in the mqtt loop that's kind of heavy
 
