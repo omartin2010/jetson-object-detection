@@ -11,6 +11,7 @@
 - [ ] Test voltage/current with the battery for the Jetson and K4A camera both simultaneously
 - [ ] Move cloud uploader to other class...?
 - [ ] Fix exception handling all along
+- [ ] Add a function to cancel tasks//..... ? because in the mqtt loop that's kind of heavy
 
 ### Solved issues:
 

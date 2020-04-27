@@ -6,6 +6,7 @@ import queue
 import os
 import sys
 import traceback
+import imagezmq
 import threading
 from copy import deepcopy
 from publish_queues import PublishQueue
@@ -28,8 +29,8 @@ from aiohttp.client_exceptions import ServerDisconnectedError, \
     ClientConnectorError
 from pyk4a import PyK4A, K4AException, FPS, Calibration, CalibrationType
 from pyk4a import Config as k4aConf
-from constant import K4A_DEFINITIONS
-from constant import LOGGER_OBJECT_DETECTOR_MAIN, \
+from constant import K4A_DEFINITIONS, \
+    LOGGER_OBJECT_DETECTOR_MAIN, \
     OBJECT_DETECTOR_CONFIG_DICT, \
     LOGGER_OBJECT_DETECTOR_MQTT_LOOP, \
     LOGGER_OBJECT_DETECTOR_RUNNER, LOGGER_OBJECT_DETECTOR_ASYNC_LOOP, \
@@ -82,6 +83,7 @@ class ObjectDetector(object):
         self.started_threads = {}
         self.show_video = False
         self.show_depth_video = False
+        self.video_streamer = None
         self.detection_threshold = self.configuration[OBJECT_DETECTOR_CONFIG_DICT]['detection_threshold']
         self.resized_image_resolution = tuple(configuration[OBJECT_DETECTOR_CONFIG_DICT]['resized_resolution'])
         self.display_image_resolution = tuple(configuration[OBJECT_DETECTOR_CONFIG_DICT]['display_resolution'])
@@ -430,6 +432,32 @@ class ObjectDetector(object):
                                 duration = 5.0
                             self.eventLoop.create_task(
                                 self.async_record_video(duration=duration))
+                        elif currentMQTTMoveMessage.topic == 'bot/jetson/video_streaming/start':
+                            if 'target_ip' in msgdict:
+                                target_ip = str(msgdict['target_ip'])
+                            else:
+                                target_ip = None
+                            if 'target_port' in msgdict:
+                                target_port = int(msgdict['target_port'])
+                            else:
+                                target_port = 5555
+                            # Only stream if target_ip is not none...
+                            if target_ip:
+                                log.warning(LOGGER_OBJECT_DETECTOR_ASYNC_PROCESS_MQTT,
+                                            msg=f'Launching Video Streaming Task')
+                                self.video_streamer = imagezmq.ImageSender(
+                                    connect_to=f'tcp://{target_ip}:'
+                                               f'{target_port}')
+                            else:
+                                log.error(LOGGER_OBJECT_DETECTOR_ASYNC_PROCESS_MQTT,
+                                          msg=f'Unable to launch streaming, '
+                                              f'undefined target IP address. '
+                                              f'Need to send target_ip in '
+                                              f'MQTT message')
+                        elif currentMQTTMoveMessage.topic == 'bot/jetson/video_streaming/stop':
+                            log.warning(LOGGER_OBJECT_DETECTOR_ASYNC_PROCESS_MQTT,
+                                        msg=f'Stopping Video streamer')
+                            self.video_streamer = None
                         elif currentMQTTMoveMessage.topic == 'bot/jetson/snap_picture':
                             if 'obj_class' in msgdict:
                                 obj_class = float(msgdict['obj_class'])
@@ -529,7 +557,8 @@ class ObjectDetector(object):
                     start_time = time.time()
                     # Read frame from camera
                     try:
-                        self.bgra_image_color_np, image_depth_np = \
+                        # self.bgra_image_color_np, image_depth_np = \
+                        self.bgra_image_color_np, self.image_depth_np = \
                             self.k4a_device.get_capture(
                                 color_only=False,
                                 transform_depth_to_color=True)
@@ -539,7 +568,7 @@ class ObjectDetector(object):
                                 self.resized_image_resolution))
                         self.image_queue.publish(self.rgb_image_color_np_resized)
                         self.image_depth_np_resized = np.asarray(
-                            Image.fromarray(image_depth_np).resize(
+                            Image.fromarray(self.image_depth_np).resize(
                                 self.resized_image_resolution,
                                 resample=Image.NEAREST))
                         # only do this after the first loop is done
@@ -552,9 +581,14 @@ class ObjectDetector(object):
                         img = self.bgra_image_color_np[:, :, :3]
                         with self.lock_tracked_objects_mp:
                             img = self.__update_image_with_info(img)
-                        resized_im = cv2.resize(img, self.display_image_resolution)
-                        self.resized_im_for_video = resized_im.copy()
-                        self.image_depth_np = image_depth_np.copy()
+                        # resized_im = cv2.resize(img, self.display_image_resolution)
+                        self.resized_im_for_video = cv2.resize(img, self.display_image_resolution)
+                        # self.resized_im_for_video = resized_im.copy()
+                        # self.image_depth_np = image_depth_np.copy()
+                        if self.video_streamer:
+                            self.video_streamer.send_image(
+                                msg='jetson',
+                                image=self.resized_im_for_video)
                         duration = time.time() - start_time
                         average_duration += duration
                         n_loops += 1

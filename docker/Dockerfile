@@ -130,6 +130,7 @@ RUN pip3 install jupyterlab flake8 git+https://github.com/microsoft/debugpy.git 
 RUN apt install -y libcanberra-gtk-module libcanberra-gtk3-module
 RUN pip3 install git+https://github.com/etiennedub/pyk4a.git@develop
 RUN pip3 install azure-storage-blob==12.3.0 azure-identity
+RUN pip3 install imagezmq
 
 WORKDIR /app
 COPY config.json /app
