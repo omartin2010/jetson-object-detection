@@ -87,6 +87,7 @@ class ObjectDetector(object):
         self.video_streamer = None
         self.detection_threshold = self.configuration[OBJECT_DETECTOR_CONFIG_DICT]['detection_threshold']
         self.resized_image_resolution = tuple(configuration[OBJECT_DETECTOR_CONFIG_DICT]['resized_resolution'])
+        self.streaming_image_resolution = tuple(configuration[OBJECT_DETECTOR_CONFIG_DICT]['streaming_resolution'])
         self.display_image_resolution = tuple(configuration[OBJECT_DETECTOR_CONFIG_DICT]['display_resolution'])
         self.ready_for_first_detection_event = threading.Event()
         self.lock_tracked_objects_mp = threading.Lock()
@@ -453,19 +454,27 @@ class ObjectDetector(object):
                                 vs_fps = msgdict['fps']
                             else:
                                 vs_fps = 5
+                            if hasattr(self, 'video_streaming_task'):
+                                log.warning(
+                                    LOGGER_OBJECT_DETECTOR_ASYNC_PROCESS_MQTT,
+                                    msg=f'Reinitializing video '
+                                        f'streaming task')
+                                self.video_streaming_task.cancel()
                             log.warning(LOGGER_OBJECT_DETECTOR_ASYNC_PROCESS_MQTT,
                                         msg=f'Launching Video Streaming Task')
-                            self.video_streamer_fps = vs_fps
-                            self.eventLoop.create_task(
-                                self.async_stream_video(
-                                    target_port=target_port,
-                                    ))
-
+                            self.video_streaming_task = \
+                                self.eventLoop.create_task(
+                                    self.async_stream_video(
+                                        target_port=target_port,
+                                        fps=vs_fps))
                         elif currentMQTTMoveMessage.topic == \
                                 'bot/jetson/video_streaming/stop':
                             log.warning(LOGGER_OBJECT_DETECTOR_ASYNC_PROCESS_MQTT,
                                         msg=f'Stopping Video streamer')
-                            self.video_streamer = None
+                            self.video_streaming_task.cancel()
+                            self.video_streaming_task = None
+                            log.warning(LOGGER_OBJECT_DETECTOR_ASYNC_PROCESS_MQTT,
+                                        msg=f'Video streamer task cancelled.')
                         elif currentMQTTMoveMessage.topic == \
                                 'bot/jetson/snap_picture':
                             if 'obj_class' in msgdict:
@@ -595,10 +604,6 @@ class ObjectDetector(object):
                         self.resized_im_for_video = cv2.resize(
                             img,
                             self.display_image_resolution)
-                        # if self.video_streamer:
-                        #     self.video_streamer.send_image(
-                        #         msg='jetson',
-                        #         image=self.resized_im_for_video)
                         duration = time.time() - start_time
                         average_duration += duration
                         n_loops += 1
@@ -698,38 +703,56 @@ class ObjectDetector(object):
         Description:
             Task to stream video, primarily for debugging purposes,
                 when there is NO screen connected to the device.
+        Args:
+            target_port : int, port listening locally
+            fps : float, number of frames per second to try and do
         """
-                                    self.video_streamer = imagezmq.ImageSender(
-                                # connect_to=f'tcp://{target_ip}:'
-                                connect_to=f'tcp://*:'
-                                           f'{target_port}',
-                                REQ_REP=False)
-
+        log.warning(LOGGER_OBJECT_DETECTION_ASYNC_STREAM_VIDEO,
+                    msg=f'Launching display video background '
+                        f'task.')
         try:
-            log.warning(LOGGER_OBJECT_DETECTION_ASYNC_STREAM_VIDEO,
-                        msg=f'Launching display video background '
-                            f'task.')
-            while True:
-                start_time = time.time()
-                # Do work
-                if self.video_streamer:
-                    self.video_streamer.send_image(
-                        msg='jetson',
-                        image=self.resized_im_for_video)
-                duration = time.time() - start_time
-                sleep_time = max(
-                    0,
-                    float(1 / self.video_streamer_fps) - duration)
-                log.debug(LOGGER_OBJECT_DETECTION_ASYNC_DISPLAY_VIDEO,
-                          msg=f'sleep_time = {sleep_time:.4f}s')
-                await asyncio.sleep(self.video_streamer_fps)
+            video_streamer = imagezmq.ImageSender(
+                connect_to=f'tcp://*:'
+                f'{target_port}',
+                REQ_REP=False)
+            log.info(LOGGER_OBJECT_DETECTION_ASYNC_STREAM_VIDEO,
+                     msg=f'Video Streamer object created')
         except asyncio.futures.CancelledError:
             log.warning(LOGGER_OBJECT_DETECTION_ASYNC_STREAM_VIDEO,
-                        msg=f'Cancelled the video streaming task.')
+                        msg=f'Cancelled the video streaming task'
+                            f'during the init phase')
         except Exception:
             log.error(LOGGER_OBJECT_DETECTION_ASYNC_STREAM_VIDEO,
-                      msg=f'Problem in async_stream_video : '
-                          f'{traceback.print_exc()}')
+                      msg=f'Problem in async_stream_video init - '
+                          f'exiting: {traceback.print_exc()}')
+        else:
+            try:
+                while True:
+                    start_time = time.time()
+                    # Do work
+                    img = cv2.resize(
+                        self.resized_im_for_video,
+                        self.streaming_image_resolution)
+                    video_streamer.send_image(
+                        msg='jetson',
+                        image=img)
+                    duration = time.time() - start_time
+                    sleep_time = max(0, float(1 / fps) - duration)
+                    log.debug(LOGGER_OBJECT_DETECTION_ASYNC_STREAM_VIDEO,
+                              msg=f'sleep_time = {sleep_time:.4f}s')
+                    await asyncio.sleep(sleep_time)
+            except asyncio.futures.CancelledError:
+                log.warning(LOGGER_OBJECT_DETECTION_ASYNC_STREAM_VIDEO,
+                            msg=f'Cancelled the video streaming task.')
+            except Exception:
+                log.error(LOGGER_OBJECT_DETECTION_ASYNC_STREAM_VIDEO,
+                          msg=f'Problem in async_stream_video : '
+                              f'{traceback.print_exc()}')
+            finally:
+                video_streamer.zmq_socket.close()
+                video_streamer = None
+                log.warning(LOGGER_OBJECT_DETECTION_ASYNC_STREAM_VIDEO,
+                            msg=f'Exiting video streaming task task now.')
 
     async def async_display_video(self) -> None:
         """
