@@ -84,7 +84,6 @@ class ObjectDetector(object):
         self.started_threads = {}
         self.show_video = False
         self.show_depth_video = False
-        self.video_streamer = None
         self.detection_threshold = self.configuration[OBJECT_DETECTOR_CONFIG_DICT]['detection_threshold']
         self.resized_image_resolution = tuple(configuration[OBJECT_DETECTOR_CONFIG_DICT]['resized_resolution'])
         self.streaming_image_resolution = tuple(configuration[OBJECT_DETECTOR_CONFIG_DICT]['streaming_resolution'])
@@ -460,8 +459,8 @@ class ObjectDetector(object):
                                     msg=f'Reinitializing video '
                                         f'streaming task')
                                 self.video_streaming_task.cancel()
-                            log.warning(LOGGER_OBJECT_DETECTOR_ASYNC_PROCESS_MQTT,
-                                        msg=f'Launching Video Streaming Task')
+                            log.debug(LOGGER_OBJECT_DETECTOR_ASYNC_PROCESS_MQTT,
+                                      msg=f'Launching Video Streaming Task')
                             self.video_streaming_task = \
                                 self.eventLoop.create_task(
                                     self.async_stream_video(
@@ -472,9 +471,8 @@ class ObjectDetector(object):
                             log.warning(LOGGER_OBJECT_DETECTOR_ASYNC_PROCESS_MQTT,
                                         msg=f'Stopping Video streamer')
                             self.video_streaming_task.cancel()
-                            self.video_streaming_task = None
-                            log.warning(LOGGER_OBJECT_DETECTOR_ASYNC_PROCESS_MQTT,
-                                        msg=f'Video streamer task cancelled.')
+                            log.debug(LOGGER_OBJECT_DETECTOR_ASYNC_PROCESS_MQTT,
+                                      msg=f'Video streamer task cancelled.')
                         elif currentMQTTMoveMessage.topic == \
                                 'bot/jetson/snap_picture':
                             if 'obj_class' in msgdict:
@@ -750,7 +748,6 @@ class ObjectDetector(object):
                               f'{traceback.print_exc()}')
             finally:
                 video_streamer.zmq_socket.close()
-                video_streamer = None
                 log.warning(LOGGER_OBJECT_DETECTION_ASYNC_STREAM_VIDEO,
                             msg=f'Exiting video streaming task task now.')
 
