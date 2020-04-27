@@ -48,7 +48,8 @@ from constant import K4A_DEFINITIONS, \
     LOGGER_OBJECT_DETECTION_GET_DISTANCE_FROM_K4A, \
     LOGGER_OBJECT_DETECTION_ASYNC_DISPLAY_VIDEO, \
     LOGGER_OBJECT_DETECTION_ASYNC_UPLOAD_FILE_TO_AZURE, \
-    LOGGER_OBJECT_DETECTION_ASYNC_WATCHDOG
+    LOGGER_OBJECT_DETECTION_ASYNC_WATCHDOG, \
+    LOGGER_OBJECT_DETECTION_ASYNC_STREAM_VIDEO
 from logger import RoboLogger
 from tracked_object import BoundingBox, TrackedObjectMP, \
     FMT_TF_BBOX, UNDETECTED, UNSEEN, UNSTABLE
@@ -128,7 +129,10 @@ class ObjectDetector(object):
                 log.info(LOGGER_OBJECT_DETECTION_SOFTSHUTDOWN,
                          msg=f'Gaterhing out put of cancellation '
                              f'of {len(tasks)} tasks...')
-                out_list = await asyncio.gather(*tasks, loop=self.eventLoop, return_exceptions=True)
+                out_list = await asyncio.gather(
+                    *tasks,
+                    loop=self.eventLoop,
+                    return_exceptions=True)
                 for idx, out in enumerate(out_list):
                     if isinstance(out, Exception):
                         log.error(LOGGER_OBJECT_DETECTION_SOFTSHUTDOWN,
@@ -359,7 +363,9 @@ class ObjectDetector(object):
 
         try:
             self.mqttClient = mqtt.Client(
-                client_id="jetsonbot", clean_session=True, transport=self.configuration["mqtt"]["brokerProto"])
+                client_id="jetsonbot",
+                clean_session=True,
+                transport=self.configuration["mqtt"]["brokerProto"])
             self.mqttClient.enable_logger(
                 logger=RoboLogger.getSpecificLogger(LOGGER_OBJECT_DETECTOR_MQTT_LOOP))
             self.mqttClient.on_subscribe = on_subscribe
@@ -399,11 +405,13 @@ class ObjectDetector(object):
                             currentMQTTMoveMessage.payload.decode('utf-8'))
 
                         # Check if need to shut down
-                        if currentMQTTMoveMessage.topic == 'bot/kill_switch':
+                        if currentMQTTMoveMessage.topic == \
+                                'bot/kill_switch':
                             log.warning(
                                 LOGGER_OBJECT_DETECTOR_ASYNC_PROCESS_MQTT, msg='Kill switch activated')
                             self.kill_switch()
-                        elif currentMQTTMoveMessage.topic == 'bot/jetson/configure':
+                        elif currentMQTTMoveMessage.topic == \
+                                'bot/jetson/configure':
                             log.info(LOGGER_OBJECT_DETECTOR_ASYNC_PROCESS_MQTT,
                                      msg=f'Modifying configuration item...')
                             for k, v in msgdict.items():
@@ -418,53 +426,55 @@ class ObjectDetector(object):
                                 else:
                                     log.error(LOGGER_OBJECT_DETECTOR_ASYNC_PROCESS_MQTT,
                                               msg=f'Attribute self.{k} not found. Will not add it.')
-                        elif currentMQTTMoveMessage.topic == 'bot/logger':
+                        elif currentMQTTMoveMessage.topic == \
+                                'bot/logger':
                             # Changing the logging level on the fly...
                             log.setLevel(msgdict['logger'], lvl=msgdict['level'])
-                        elif currentMQTTMoveMessage.topic == 'bot/logger/multiple':
+                        elif currentMQTTMoveMessage.topic == \
+                                'bot/logger/multiple':
                             # Changing the logging level on the fly for multiple loggers at a time
                             for logger, level in msgdict.items():
                                 log.setLevel(logger, level)
-                        elif currentMQTTMoveMessage.topic == 'bot/jetson/start_video':
+                        elif currentMQTTMoveMessage.topic == \
+                                'bot/jetson/start_video':
                             if 'duration' in msgdict:
                                 duration = float(msgdict['duration'])
                             else:
                                 duration = 5.0
                             self.eventLoop.create_task(
                                 self.async_record_video(duration=duration))
-                        elif currentMQTTMoveMessage.topic == 'bot/jetson/video_streaming/start':
-                            if 'target_ip' in msgdict:
-                                target_ip = str(msgdict['target_ip'])
-                            else:
-                                target_ip = None
+                        elif currentMQTTMoveMessage.topic == \
+                                'bot/jetson/video_streaming/start':
                             if 'target_port' in msgdict:
                                 target_port = int(msgdict['target_port'])
                             else:
                                 target_port = 5555
-                            # Only stream if target_ip is not none...
-                            if target_ip:
-                                log.warning(LOGGER_OBJECT_DETECTOR_ASYNC_PROCESS_MQTT,
-                                            msg=f'Launching Video Streaming Task')
-                                self.video_streamer = imagezmq.ImageSender(
-                                    connect_to=f'tcp://{target_ip}:'
-                                               f'{target_port}')
+                            if 'fps' in msgdict:
+                                vs_fps = msgdict['fps']
                             else:
-                                log.error(LOGGER_OBJECT_DETECTOR_ASYNC_PROCESS_MQTT,
-                                          msg=f'Unable to launch streaming, '
-                                              f'undefined target IP address. '
-                                              f'Need to send target_ip in '
-                                              f'MQTT message')
-                        elif currentMQTTMoveMessage.topic == 'bot/jetson/video_streaming/stop':
+                                vs_fps = 5
+                            log.warning(LOGGER_OBJECT_DETECTOR_ASYNC_PROCESS_MQTT,
+                                        msg=f'Launching Video Streaming Task')
+                            self.video_streamer_fps = vs_fps
+                            self.eventLoop.create_task(
+                                self.async_stream_video(
+                                    target_port=target_port,
+                                    ))
+
+                        elif currentMQTTMoveMessage.topic == \
+                                'bot/jetson/video_streaming/stop':
                             log.warning(LOGGER_OBJECT_DETECTOR_ASYNC_PROCESS_MQTT,
                                         msg=f'Stopping Video streamer')
                             self.video_streamer = None
-                        elif currentMQTTMoveMessage.topic == 'bot/jetson/snap_picture':
+                        elif currentMQTTMoveMessage.topic == \
+                                'bot/jetson/snap_picture':
                             if 'obj_class' in msgdict:
                                 obj_class = float(msgdict['obj_class'])
                             else:
                                 obj_class = None
                             if 'include_visualisation_data' in msgdict:
-                                include_visualisation_data = msgdict['include_visualisation_data']
+                                include_visualisation_data = \
+                                    msgdict['include_visualisation_data']
                             else:
                                 include_visualisation_data = False
                             self.eventLoop.create_task(
@@ -562,7 +572,8 @@ class ObjectDetector(object):
                             self.k4a_device.get_capture(
                                 color_only=False,
                                 transform_depth_to_color=True)
-                        self.rgb_image_color_np = self.bgra_image_color_np[:, :, :3][..., ::-1]
+                        self.rgb_image_color_np = \
+                            self.bgra_image_color_np[:, :, :3][..., ::-1]
                         self.rgb_image_color_np_resized = np.asarray(
                             Image.fromarray(self.rgb_image_color_np).resize(
                                 self.resized_image_resolution))
@@ -581,14 +592,13 @@ class ObjectDetector(object):
                         img = self.bgra_image_color_np[:, :, :3]
                         with self.lock_tracked_objects_mp:
                             img = self.__update_image_with_info(img)
-                        # resized_im = cv2.resize(img, self.display_image_resolution)
-                        self.resized_im_for_video = cv2.resize(img, self.display_image_resolution)
-                        # self.resized_im_for_video = resized_im.copy()
-                        # self.image_depth_np = image_depth_np.copy()
-                        if self.video_streamer:
-                            self.video_streamer.send_image(
-                                msg='jetson',
-                                image=self.resized_im_for_video)
+                        self.resized_im_for_video = cv2.resize(
+                            img,
+                            self.display_image_resolution)
+                        # if self.video_streamer:
+                        #     self.video_streamer.send_image(
+                        #         msg='jetson',
+                        #         image=self.resized_im_for_video)
                         duration = time.time() - start_time
                         average_duration += duration
                         n_loops += 1
@@ -669,9 +679,9 @@ class ObjectDetector(object):
                     raise Exception(f'thread_name : {thread_name} ; '
                                     f'exc_type : {exc_type} ; '
                                     f'exc_obj : {exc_obj} ; ')
-                log.warning(LOGGER_OBJECT_DETECTION_ASYNC_WATCHDOG,
-                            msg=f'Heartbeat OK - Checking again in '
-                                f'{watchdog_timer} seconds')
+                log.info(LOGGER_OBJECT_DETECTION_ASYNC_WATCHDOG,
+                         msg=f'Heartbeat OK - Checking again in '
+                             f'{watchdog_timer} seconds')
                 await asyncio.sleep(watchdog_timer)
         except asyncio.futures.CancelledError:
             log.warning(LOGGER_OBJECT_DETECTION_ASYNC_WATCHDOG,
@@ -680,6 +690,46 @@ class ObjectDetector(object):
             log.critical(LOGGER_OBJECT_DETECTION_ASYNC_WATCHDOG,
                          msg=f'Problem with critical task or thread. Need to quit')
             raise
+
+    async def async_stream_video(self,
+                                 target_port=5555,
+                                 fps=5) -> None:
+        """
+        Description:
+            Task to stream video, primarily for debugging purposes,
+                when there is NO screen connected to the device.
+        """
+                                    self.video_streamer = imagezmq.ImageSender(
+                                # connect_to=f'tcp://{target_ip}:'
+                                connect_to=f'tcp://*:'
+                                           f'{target_port}',
+                                REQ_REP=False)
+
+        try:
+            log.warning(LOGGER_OBJECT_DETECTION_ASYNC_STREAM_VIDEO,
+                        msg=f'Launching display video background '
+                            f'task.')
+            while True:
+                start_time = time.time()
+                # Do work
+                if self.video_streamer:
+                    self.video_streamer.send_image(
+                        msg='jetson',
+                        image=self.resized_im_for_video)
+                duration = time.time() - start_time
+                sleep_time = max(
+                    0,
+                    float(1 / self.video_streamer_fps) - duration)
+                log.debug(LOGGER_OBJECT_DETECTION_ASYNC_DISPLAY_VIDEO,
+                          msg=f'sleep_time = {sleep_time:.4f}s')
+                await asyncio.sleep(self.video_streamer_fps)
+        except asyncio.futures.CancelledError:
+            log.warning(LOGGER_OBJECT_DETECTION_ASYNC_STREAM_VIDEO,
+                        msg=f'Cancelled the video streaming task.')
+        except Exception:
+            log.error(LOGGER_OBJECT_DETECTION_ASYNC_STREAM_VIDEO,
+                      msg=f'Problem in async_stream_video : '
+                          f'{traceback.print_exc()}')
 
     async def async_display_video(self) -> None:
         """
