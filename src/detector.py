@@ -706,7 +706,7 @@ class ObjectDetector(object):
             fps : float, number of frames per second to try and do
         """
         log.warning(LOGGER_OBJECT_DETECTION_ASYNC_STREAM_VIDEO,
-                    msg=f'Launching display video background '
+                    msg=f'Launching streaming video background '
                         f'task.')
         try:
             video_streamer = imagezmq.ImageSender(
