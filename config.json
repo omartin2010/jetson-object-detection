@@ -3,6 +3,7 @@
         "brokerIP" : "192.168.32.50",
         "brokerPort" : 1883,
         "brokerProto" : "tcp",
+        "clientID" : "jetson",
         "subscribedTopics":["bot/jetson/configure",
                             "bot/jetson/start_video",
                             "bot/jetson/video_streaming/start",
