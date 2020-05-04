@@ -363,7 +363,7 @@ class ObjectDetector(object):
 
         try:
             self.mqttClient = mqtt.Client(
-                client_id="jetsonbot",
+                client_id="jetson",
                 clean_session=True,
                 transport=self.configuration["mqtt"]["brokerProto"])
             self.mqttClient.enable_logger(
