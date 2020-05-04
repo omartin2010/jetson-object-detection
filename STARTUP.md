@@ -23,7 +23,7 @@ docker run --restart unless-stopped --privileged \
     --name objectdetector \
     --network host \
     -v /tmp/.X11-unix:/tmp/.X11-unix \
-    --env-file ~/proj/objectdetector/.env.list \
+    --env-file ~/proj/jetson-object-detection/.env.list \
     --memory 2g \
     --memory-swap 3g \
     --cpus=2.5 \

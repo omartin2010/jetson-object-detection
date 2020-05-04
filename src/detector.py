@@ -427,11 +427,11 @@ class ObjectDetector(object):
                                     log.error(LOGGER_OBJECT_DETECTOR_ASYNC_PROCESS_MQTT,
                                               msg=f'Attribute self.{k} not found. Will not add it.')
                         elif currentMQTTMoveMessage.topic == \
-                                'bot/logger':
+                                'bot/jetson/logger':
                             # Changing the logging level on the fly...
                             log.setLevel(msgdict['logger'], lvl=msgdict['level'])
                         elif currentMQTTMoveMessage.topic == \
-                                'bot/logger/multiple':
+                                'bot/jetson/logger/multiple':
                             # Changing the logging level on the fly for multiple loggers at a time
                             for logger, level in msgdict.items():
                                 log.setLevel(logger, level)

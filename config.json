@@ -9,8 +9,8 @@
                             "bot/jetson/video_streaming/stop",
                             "bot/jetson/snap_picture",
                             "bot/killSwitch",
-                            "bot/logger",
-                            "bot/logger/multiple"],
+                            "bot/jetson/logger",
+                            "bot/jetson/logger/multiple"],
         "publishingTopics":["client/moveBaseFeedback",
                             "client/moveEndEffectorFeedback",
                             "client/ErrorHandling"]
