@@ -119,18 +119,18 @@ RUN echo 'debconf debconf/frontend select Noninteractive' | debconf-set-selectio
     apt-get install -y libk4a1.4 libk4a1.4-dev k4a-tools
 
 ENV DEBIAN_FRONTEND="noninteractive"
-RUN apt install -y tzdata
+RUN apt-get install -y tzdata
 RUN ln -fs /usr/share/zoneinfo/America/New_York /etc/localtime
 RUN dpkg-reconfigure --frontend noninteractive tzdata
 
 RUN pip3 install jupyter matplotlib image
 
 RUN pip3 uninstall -y enum34 
-RUN pip3 install jupyterlab flake8 git+https://github.com/microsoft/debugpy.git paho-mqtt aiohttp 
-RUN apt install -y libcanberra-gtk-module libcanberra-gtk3-module
+RUN pip3 install jupyterlab flake8 debugpy paho-mqtt aiohttp azure-storage-blob==12.3.0 azure-identity imagezmq
+RUN apt-get install -y libcanberra-gtk-module libcanberra-gtk3-module
+# PATCH FOR K4A
+# COPY docker/libk4a.so.1.4.0 /usr/lib/aarch64-linux-gnu
 RUN pip3 install git+https://github.com/etiennedub/pyk4a.git@develop
-RUN pip3 install azure-storage-blob==12.3.0 azure-identity
-RUN pip3 install imagezmq
 
 WORKDIR /app
 COPY config.json /app

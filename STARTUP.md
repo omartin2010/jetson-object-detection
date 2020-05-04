@@ -19,7 +19,7 @@ Docker command to run this. IT can be in `.xsessionrc` as this needs to be run w
 ```
 export DISPLAY=:0;
 xhost +si:localuser:root;
-docker run --restart unless-stopped --privileged -d \
+docker run --restart unless-stopped --privileged \
     --name objectdetector \
     --network host \
     -v /tmp/.X11-unix:/tmp/.X11-unix \
@@ -29,4 +29,3 @@ docker run --restart unless-stopped --privileged -d \
     --cpus=2.5 \
     objectdetector:latest
 ```
-
