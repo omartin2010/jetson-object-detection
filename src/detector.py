@@ -832,11 +832,16 @@ class ObjectDetector(object):
                     # wait for duration seconds for recording to take place
                     log.warning(LOGGER_OBJECT_DETECTION_ASYNC_RECORD_VIDEO,
                                 msg=f'Recording video to {local_file_path} now.')
+                    frm_id = 0
                     while time.time() - start_time < duration:
                         loop_start = time.time()
                         video_writer.write(self.resized_im_for_video)
-                        duration = time.time() - loop_start
-                        sleep_time = max(0, self.frame_duration - duration)
+                        frm_id += 1
+                        loop_duration = time.time() - loop_start
+                        sleep_time = max(0, self.frame_duration - loop_duration)
+                        log.debug(LOGGER_OBJECT_DETECTION_ASYNC_RECORD_VIDEO,
+                                  msg=f'Frame {frm_id} added to video - '
+                                      f'sleeping {sleep_time:.4f}s')
                         await asyncio.sleep(sleep_time)
                 except Exception:
                     raise Exception()
