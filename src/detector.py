@@ -54,7 +54,8 @@ from logger import RoboLogger
 from tracked_object import BoundingBox, TrackedObjectMP, \
     FMT_TF_BBOX, UNDETECTED, UNSEEN, UNSTABLE
 log = RoboLogger.getLogger()
-log.warning(LOGGER_OBJECT_DETECTOR_MAIN, msg=f'PID {os.getpid()} Launched. Libraries loaded.')
+log.warning(LOGGER_OBJECT_DETECTOR_MAIN, msg=f'PID {os.getpid()} Launched. '
+                                             f'Libraries loaded.')
 
 
 class ObjectDetector(object):
@@ -68,12 +69,16 @@ class ObjectDetector(object):
         self.configuration = configuration
         # Adjust configuration (to make strings into constants)
         self.__adjustConfigDict(self.configuration)
-        self.num_classes = configuration[OBJECT_DETECTOR_CONFIG_DICT]['num_classes']
-        self.label_map_path = configuration[OBJECT_DETECTOR_CONFIG_DICT]['label_map_path']
+        self.num_classes = \
+            configuration[OBJECT_DETECTOR_CONFIG_DICT]['num_classes']
+        self.label_map_path = \
+            configuration[OBJECT_DETECTOR_CONFIG_DICT]['label_map_path']
         self.mqtt_message_queue = queue.Queue()
         self.thread_exception_queue = queue.Queue()
-        self.ready_queue = queue.Queue()   # used to signal that there's an image ready for processing
-        self.object_detection_result_queue = queue.Queue(maxsize=5)   # 5 allows for debugging...
+        # used to signal that there's an image ready for processing
+        self.ready_queue = queue.Queue()
+        # 5 allows for debugging...
+        self.object_detection_result_queue = queue.Queue(maxsize=5)
         self.category_index = self.configuration['object_classes']
         self._fourcc = cv2.VideoWriter_fourcc(*'MJPG')
         self.__video_file_extension = '.avi'
@@ -84,28 +89,44 @@ class ObjectDetector(object):
         self.started_threads = {}
         self.show_video = False
         self.show_depth_video = False
-        self.detection_threshold = self.configuration[OBJECT_DETECTOR_CONFIG_DICT]['detection_threshold']
-        self.resized_image_resolution = tuple(configuration[OBJECT_DETECTOR_CONFIG_DICT]['resized_resolution'])
-        self.streaming_image_resolution = tuple(configuration[OBJECT_DETECTOR_CONFIG_DICT]['streaming_resolution'])
-        self.display_image_resolution = tuple(configuration[OBJECT_DETECTOR_CONFIG_DICT]['display_resolution'])
+        self.video_streamer = None
+        object_detect_config_dict = \
+            self.configuration[OBJECT_DETECTOR_CONFIG_DICT]
+        self.detection_threshold = \
+            object_detect_config_dict['detection_threshold']
+        self.resized_image_resolution = \
+            tuple(object_detect_config_dict['resized_resolution'])
+        self.streaming_image_resolution = \
+            tuple(object_detect_config_dict['streaming_resolution'])
+        self.display_image_resolution = \
+            tuple(object_detect_config_dict['display_resolution'])
         self.ready_for_first_detection_event = threading.Event()
         self.lock_tracked_objects_mp = threading.Lock()
         self.tracked_objects_mp = {}
         self.image_queue = PublishQueue()
-        self.default_tracker = self.configuration[OBJECT_DETECTOR_CONFIG_DICT]['open_cv_default_tracker']
-        self.max_unseen_time_for_object = self.configuration[OBJECT_DETECTOR_CONFIG_DICT]['max_unseen_time_for_object']
-        self.max_tracked_objects = self.configuration[OBJECT_DETECTOR_CONFIG_DICT]['max_tracked_objects']
-        self.time_between_scoring_service_calls = self.configuration[OBJECT_DETECTOR_CONFIG_DICT]['time_between_scoring_service_calls']
+        self.default_tracker = \
+            object_detect_config_dict['open_cv_default_tracker']
+        self.max_unseen_time_for_object = \
+            object_detect_config_dict['max_unseen_time_for_object']
+        self.max_tracked_objects = \
+            object_detect_config_dict['max_tracked_objects']
+        self.time_between_scoring_service_calls = \
+            object_detect_config_dict['time_between_scoring_service_calls']
         self.eventLoop = loop
         self.__azure_credentials = EnvironmentCredential()
-        self.__blob_service_endpoint = self.configuration[OBJECT_DETECTOR_CLOUD_CONFIG_DICT]['cloud_storage_blob_endpoint']
-        self.__video_cloud_container = self.configuration[OBJECT_DETECTOR_CLOUD_CONFIG_DICT]['video_blob_container']
-        self.__images_cloud_container = self.configuration[OBJECT_DETECTOR_CLOUD_CONFIG_DICT]['images_blob_container']
+        object_detect_clound_dict = \
+            self.configuration[OBJECT_DETECTOR_CLOUD_CONFIG_DICT]
+        self.__blob_service_endpoint = \
+            object_detect_clound_dict['cloud_storage_blob_endpoint']
+        self.__video_cloud_container = \
+            object_detect_clound_dict['video_blob_container']
+        self.__images_cloud_container = \
+            object_detect_clound_dict['images_blob_container']
 
     async def graceful_shutdown(self, s=None) -> None:
         """
-        Description : Ensures a clean shutdown of the robot, including shutting down
-            the Kinect camera
+        Description : Ensures a clean shutdown of the robot, including
+            shutting down the Kinect camera
         Args:
             s = signal from the signal library. Could be SIGINT, SIGTERM,
                 etc. if set to None, it's cancelled from another process.
@@ -159,7 +180,8 @@ class ObjectDetector(object):
 
             # Stop pool manager thread first
             try:
-                event = self.started_threads[self.object_detection_pool_manager_thread]
+                event = self.started_threads[
+                    self.object_detection_pool_manager_thread]
                 if self.object_detection_pool_manager_thread.is_alive():
                     event.set()
                     await asyncio.sleep(0.5)
@@ -167,7 +189,8 @@ class ObjectDetector(object):
                         log.error(LOGGER_OBJECT_DETECTION_SOFTSHUTDOWN,
                                   msg=f'Problem shutting down '
                                       f'pool manager thread!')
-                self.started_threads.pop(self.object_detection_pool_manager_thread)
+                self.started_threads.pop(
+                    self.object_detection_pool_manager_thread)
             except:
                 log.error(LOGGER_OBJECT_DETECTION_SOFTSHUTDOWN,
                           msg=f'Exception in shutting the pool manager '
@@ -244,12 +267,14 @@ class ObjectDetector(object):
                 args=([exit_capture_thread_event]),
                 name='thread_capture_loop')
             self.capture_loop_thread.start()
-            self.started_threads[self.capture_loop_thread] = exit_capture_thread_event
+            self.started_threads[self.capture_loop_thread] = \
+                exit_capture_thread_event
 
             # Launching Manage Object Detection Pools
 
             log.warning(LOGGER_OBJECT_DETECTOR_RUNNER,
-                        msg=f'Launching Object Detection Pool and Thread Managers')
+                        msg=f'Launching Object Detection '
+                            f'Pool and Thread Managers')
             exit_detection_pool_manager_thread_event = threading.Event()
             self.object_detection_pool_manager_thread = threading.Thread(
                 target=self.thread_object_detection_pool_manager,
@@ -259,7 +284,8 @@ class ObjectDetector(object):
             self.started_threads[self.object_detection_pool_manager_thread] = \
                 exit_detection_pool_manager_thread_event
 
-            # Create a list of tasks that need to be constantly running (used by watchdog)
+            # Create a list of tasks that need to be constantly running (used
+            # by watchdog)
             self.critical_asyncio_tasks = [
                 self.async_process_mqtt_messages_task,
                 self.async_run_detection_task,
@@ -321,7 +347,8 @@ class ObjectDetector(object):
         """
         mqtt_default_qos = 2
         self.mqtt_topics = [(topic, mqtt_default_qos)
-                            for topic in self.configuration['mqtt']['subscribedTopics']]
+                            for topic in self.configuration[
+                                'mqtt']['subscribedTopics']]
 
         def on_connect(client, userdata, flags, rc):
             log.info(LOGGER_OBJECT_DETECTOR_MQTT_LOOP,
@@ -330,7 +357,8 @@ class ObjectDetector(object):
                 self.mqtt_topics)
             if mqtt_connect_result == mqtt.MQTT_ERR_SUCCESS:
                 log.warning(LOGGER_OBJECT_DETECTOR_MQTT_LOOP,
-                            msg=f'Successfully subscribed to topics in input config file')
+                            msg=f'Successfully subscribed to '
+                                f'topics in input config file')
                 log.debug(LOGGER_OBJECT_DETECTOR_MQTT_LOOP,
                           msg=f'Topics subcribed = {self.mqtt_topics}')
             else:
@@ -342,7 +370,8 @@ class ObjectDetector(object):
             a new message is publisehd to one of the queues we subscribe to)
             """
             log.info(LOGGER_OBJECT_DETECTOR_MQTT_LOOP,
-                     msg=f'Received MID {message.mid} : "{str(message.payload)}" '
+                     msg=f'Received MID {message.mid} : '
+                         f'"{str(message.payload)}" '
                          f'on topic {message.topic} with QoS {message.qos}')
             self.mqtt_message_queue.put_nowait(message)
 
@@ -356,10 +385,12 @@ class ObjectDetector(object):
         def on_subscribe(client, userdata, mid, granted_qos):
             if mid == self.mqtt_connect_mid:
                 log.debug(LOGGER_OBJECT_DETECTOR_MQTT_LOOP,
-                          msg=f'Subscribed to topics. Granted QOS = {granted_qos}')
+                          msg=f'Subscribed to topics. Granted '
+                              f'QOS = {granted_qos}')
             else:
                 log.error(LOGGER_OBJECT_DETECTOR_MQTT_LOOP,
-                          msg=f'Strange... MID does not match self.mqtt_connect_mid')
+                          msg=f'Strange... MID does not match '
+                              f'self.mqtt_connect_mid')
 
         try:
             self.mqttClient = mqtt.Client(
@@ -367,19 +398,19 @@ class ObjectDetector(object):
                 clean_session=True,
                 transport=self.configuration["mqtt"]["brokerProto"])
             self.mqttClient.enable_logger(
-                logger=RoboLogger.getSpecificLogger(LOGGER_OBJECT_DETECTOR_MQTT_LOOP))
+                logger=RoboLogger.getSpecificLogger(
+                    LOGGER_OBJECT_DETECTOR_MQTT_LOOP))
             self.mqttClient.on_subscribe = on_subscribe
             self.mqttClient.on_connect = on_connect
             self.mqttClient.on_disconnect = on_disconnect
             self.mqttClient.on_message = on_message
-            self.mqttClient.connect(host=self.configuration["mqtt"]["brokerIP"],
-                                    port=self.configuration["mqtt"]["brokerPort"])
+            self.mqttClient.connect(
+                host=self.configuration["mqtt"]["brokerIP"],
+                port=self.configuration["mqtt"]["brokerPort"])
             self.mqttClient.loop_forever()
         except Exception:
             log.error(LOGGER_OBJECT_DETECTOR_MQTT_LOOP,
                       f'Error : {traceback.print_exc()}')
-            # # Bump up the problem...
-            # self.thread_exception_queue.put('thread_mqtt_listener', sys.exc_info())
         finally:
             log.warning(LOGGER_OBJECT_DETECTOR_MQTT_LOOP,
                         msg=f'Exiting MQTT connection thread.')
@@ -398,7 +429,8 @@ class ObjectDetector(object):
             while True:
                 try:
                     if self.mqtt_message_queue.empty() is False:
-                        # Remove the first in the list, will pause until there is something
+                        # Remove the first in the list, will pause
+                        # until there is something
                         currentMQTTMoveMessage = self.mqtt_message_queue.get()
                         # Decode message received
                         msgdict = json.loads(
@@ -408,7 +440,8 @@ class ObjectDetector(object):
                         if currentMQTTMoveMessage.topic == \
                                 'bot/kill_switch':
                             log.warning(
-                                LOGGER_OBJECT_DETECTOR_ASYNC_PROCESS_MQTT, msg='Kill switch activated')
+                                LOGGER_OBJECT_DETECTOR_ASYNC_PROCESS_MQTT,
+                                msg='Kill switch activated')
                             self.kill_switch()
                         elif currentMQTTMoveMessage.topic == \
                                 'bot/jetson/configure':
@@ -416,23 +449,30 @@ class ObjectDetector(object):
                                      msg=f'Modifying configuration item...')
                             for k, v in msgdict.items():
                                 if k in dir(self):
-                                    log.info(LOGGER_OBJECT_DETECTOR_ASYNC_PROCESS_MQTT,
-                                             msg=f'Setting attribute self.{k} to value {v}')
-                                    # Adding / changing configuration parameters for the object
+                                    log.info(LOGGER_OBJECT_DETECTOR_ASYNC_PROCESS_MQTT,        # noqa e501
+                                             msg=f'Setting attribute self.{k} '
+                                                 f'to value {v}')
+                                    # Adding / changing configuration
+                                    # parameters for the object
                                     self.__setattr__(k, v)
-                                    log.warning(LOGGER_OBJECT_DETECTOR_ASYNC_PROCESS_MQTT,
-                                                msg=f'After validation, attribute self.{k} '
-                                                    f'= "{self.__getattribute__(k)}"')
+                                    log.warning(LOGGER_OBJECT_DETECTOR_ASYNC_PROCESS_MQTT,         # noqa e501
+                                                msg=f'After validation, '
+                                                    f'attribute self.{k} '
+                                                    f'= "{self.__getattribute__(k)}"')             # noqa e501
                                 else:
-                                    log.error(LOGGER_OBJECT_DETECTOR_ASYNC_PROCESS_MQTT,
-                                              msg=f'Attribute self.{k} not found. Will not add it.')
+                                    log.error(LOGGER_OBJECT_DETECTOR_ASYNC_PROCESS_MQTT,           # noqa e501
+                                              msg=f'Attribute self.{k} not '
+                                                  f'found. Will not add it.')
                         elif currentMQTTMoveMessage.topic == \
                                 'bot/jetson/logger':
                             # Changing the logging level on the fly...
-                            log.setLevel(msgdict['logger'], lvl=msgdict['level'])
+                            log.setLevel(
+                                msgdict['logger'],
+                                lvl=msgdict['level'])
                         elif currentMQTTMoveMessage.topic == \
-                                'bot/jetson/logger/multiple':
-                            # Changing the logging level on the fly for multiple loggers at a time
+                                'bot/logger/multiple':
+                            # Changing the logging level on the fly for
+                            # multiple loggers at a time
                             for logger, level in msgdict.items():
                                 log.setLevel(logger, level)
                         elif currentMQTTMoveMessage.topic == \
@@ -459,8 +499,9 @@ class ObjectDetector(object):
                                     msg=f'Reinitializing video '
                                         f'streaming task')
                                 self.video_streaming_task.cancel()
-                            log.debug(LOGGER_OBJECT_DETECTOR_ASYNC_PROCESS_MQTT,
-                                      msg=f'Launching Video Streaming Task')
+                            log.warning(
+                                LOGGER_OBJECT_DETECTOR_ASYNC_PROCESS_MQTT,
+                                msg=f'Launching Video Streaming Task')
                             self.video_streaming_task = \
                                 self.eventLoop.create_task(
                                     self.async_stream_video(
@@ -468,11 +509,14 @@ class ObjectDetector(object):
                                         fps=vs_fps))
                         elif currentMQTTMoveMessage.topic == \
                                 'bot/jetson/video_streaming/stop':
-                            log.warning(LOGGER_OBJECT_DETECTOR_ASYNC_PROCESS_MQTT,
-                                        msg=f'Stopping Video streamer')
+                            log.warning(
+                                LOGGER_OBJECT_DETECTOR_ASYNC_PROCESS_MQTT,
+                                msg=f'Stopping Video streamer')
                             self.video_streaming_task.cancel()
-                            log.debug(LOGGER_OBJECT_DETECTOR_ASYNC_PROCESS_MQTT,
-                                      msg=f'Video streamer task cancelled.')
+                            self.video_streaming_task = None
+                            log.warning(
+                                LOGGER_OBJECT_DETECTOR_ASYNC_PROCESS_MQTT,
+                                msg=f'Video streamer task cancelled.')
                         elif currentMQTTMoveMessage.topic == \
                                 'bot/jetson/snap_picture':
                             if 'obj_class' in msgdict:
@@ -486,8 +530,8 @@ class ObjectDetector(object):
                                 include_visualisation_data = False
                             self.eventLoop.create_task(
                                 self.async_save_picture(
-                                    obj_class=obj_class,
-                                    include_visualisation_data=include_visualisation_data))
+                                    obj_class,
+                                    include_visualisation_data))
                         else:
                             raise NotImplementedError
                     await asyncio.sleep(loopDelay)
@@ -509,9 +553,10 @@ class ObjectDetector(object):
                             exit_thread_event: threading.Event) -> None:
         """
         Description :
-            Video capture loop (can optionally display video) for debugging purposes.
-                The loop also additionally calls __get_distance_from_k4a to keep objects
-                updated with their respective distances to the camera
+            Video capture loop (can optionally display video) for
+                debugging purposes. The loop also additionally calls
+                __get_distance_from_k4a to keep objects updated with
+                their respective distances to the camera
         Args:
             exit_thread_event : <class 'threading.Event()'> : used to signal
                 process it's time to end.
@@ -519,12 +564,13 @@ class ObjectDetector(object):
         try:
             log.warning(LOGGER_OBJECT_DETECTOR_RUNNER,
                         msg=f'Initializing Kinect Thread')
-            k4a_config_dict = self.configuration[OBJECT_DETECTOR_CONFIG_DICT]['k4a_device']
+            k4a_config_dict = \
+                self.configuration[OBJECT_DETECTOR_CONFIG_DICT]['k4a_device']
             self.k4a_config = k4aConf(
                 color_resolution=k4a_config_dict['color_resolution'],
                 depth_mode=k4a_config_dict['depth_mode'],
                 camera_fps=k4a_config_dict['camera_fps'],
-                synchronized_images_only=k4a_config_dict['synchronized_images_only'])
+                synchronized_images_only=k4a_config_dict['synchronized_images_only'])   # noqa e501
             if k4a_config_dict['camera_fps'] == FPS.FPS_5:
                 self.frame_duration = 1. / 5
                 self.fps = 5
@@ -556,10 +602,10 @@ class ObjectDetector(object):
                     target_calibration=CalibrationType.GYRO)
             except K4AException:
                 log.critical(LOGGER_OBJECT_DETECTOR_RUNNER,
-                             msg=f'Unable to initialize K4A device. Exiting thread.')
+                             msg=f'Unable to initialize K4A device. '
+                                 f'Exiting thread.')
                 exit_thread_event.set()
                 break
-                # self.thread_exception_queue.put('thread_capture_loop', sys.exc_info())
             try:
                 # Stats counters for the loop
                 n_loops = 0
@@ -584,7 +630,8 @@ class ObjectDetector(object):
                         self.rgb_image_color_np_resized = np.asarray(
                             Image.fromarray(self.rgb_image_color_np).resize(
                                 self.resized_image_resolution))
-                        self.image_queue.publish(self.rgb_image_color_np_resized)
+                        self.image_queue.publish(
+                            self.rgb_image_color_np_resized)
                         self.image_depth_np_resized = np.asarray(
                             Image.fromarray(self.image_depth_np).resize(
                                 self.resized_image_resolution,
@@ -643,7 +690,6 @@ class ObjectDetector(object):
             except Exception:
                 log.error(LOGGER_OBJECT_DETECTOR_RUNNER,
                           msg=f'Error : {traceback.print_exc()}')
-                # self.thread_exception_queue.put('thread_capture_loop', sys.exc_info())
         log.warning(LOGGER_OBJECT_DETECTOR_RUNNER,
                     msg=f'Exiting thread_capture_loop thread. Should never '
                         f'happen unless error or shutdown initiated.')
@@ -672,11 +718,13 @@ class ObjectDetector(object):
                 # Capture exceptions from threads as the run function has
                 # exited and is unable to catch errors
                 try:
-                    thread_exception = self.thread_exception_queue.get(block=False)
+                    thread_exception = self.thread_exception_queue.get(
+                        block=False)
                 except queue.Empty:
                     pass
                 else:
-                    thread_name, exc_type, exc_obj, exc_trace = thread_exception
+                    thread_name, exc_type, exc_obj, exc_trace = \
+                        thread_exception
                     # deal with the exception raised in threads IF the threads
                     # aren't terminating with the exception.
                     raise Exception(f'thread_name : {thread_name} ; '
@@ -691,7 +739,8 @@ class ObjectDetector(object):
                         msg=f'Cancelled the watchdog task.')
         except Exception:
             log.critical(LOGGER_OBJECT_DETECTION_ASYNC_WATCHDOG,
-                         msg=f'Problem with critical task or thread. Need to quit')
+                         msg=f'Problem with critical task or thread. '
+                             f'Need to quit')
             raise
 
     async def async_stream_video(self,
@@ -767,7 +816,8 @@ class ObjectDetector(object):
                 start_time = time.time()
                 if self.show_video:
                     log.debug(LOGGER_OBJECT_DETECTION_ASYNC_DISPLAY_VIDEO,
-                              msg=f'showing: show_video... shape of image is: {self.resized_im_for_video.shape}')
+                              msg=f'showing: show_video... shape of image '
+                                  f'is: {self.resized_im_for_video.shape}')
                     cv2.imshow('show_video', self.resized_im_for_video)
                     cv2.waitKey(1)
                     prev_show_video = True
@@ -793,7 +843,9 @@ class ObjectDetector(object):
                 duration = time.time() - start_time
                 sleep_time = max(0, self.frame_duration - duration)
                 log.debug(LOGGER_OBJECT_DETECTION_ASYNC_DISPLAY_VIDEO,
-                          msg=f'sleep_time = {sleep_time:.4f}s - show_video = {self.show_video}, prev_show_video = {prev_show_video}')
+                          msg=f'sleep_time = {sleep_time:.4f}s - '
+                              f'show_video = {self.show_video}, '
+                              f'prev_show_video = {prev_show_video}')
                 await asyncio.sleep(sleep_time)
         except asyncio.futures.CancelledError:
             log.warning(LOGGER_OBJECT_DETECTION_ASYNC_DISPLAY_VIDEO,
@@ -821,24 +873,26 @@ class ObjectDetector(object):
                 # Create temp file
                 local_file_path = os.path.join(
                     tmpdirname,
-                    next(tempfile._get_candidate_names()) + self.__video_file_extension)
+                    next(tempfile._get_candidate_names()) + self.__video_file_extension)      # noqa e501
                 log.warning(LOGGER_OBJECT_DETECTION_ASYNC_RECORD_VIDEO,
-                            msg=f'Created file {local_file_path} to store video. '
-                                f'Res = {self.display_image_resolution}')
+                            msg=f'Created file {local_file_path} to store '
+                                f'video. Res = '
+                                f'{self.display_image_resolution}')
                 try:
                     video_writer = cv2.VideoWriter(
                         local_file_path, self._fourcc,
                         float(self.fps), self.display_image_resolution)
                     # wait for duration seconds for recording to take place
-                    log.warning(LOGGER_OBJECT_DETECTION_ASYNC_RECORD_VIDEO,
-                                msg=f'Recording video to {local_file_path} now.')
+                    log.warning(
+                        LOGGER_OBJECT_DETECTION_ASYNC_RECORD_VIDEO,
+                        msg=f'Recording video to {local_file_path} now.')
                     frm_id = 0
                     while time.time() - start_time < duration:
                         loop_start = time.time()
                         video_writer.write(self.resized_im_for_video)
                         frm_id += 1
                         loop_duration = time.time() - loop_start
-                        sleep_time = max(0, self.frame_duration - loop_duration)
+                        sleep_time = max(0, self.frame_duration - loop_duration)        # noqa e501
                         log.debug(LOGGER_OBJECT_DETECTION_ASYNC_RECORD_VIDEO,
                                   msg=f'Frame {frm_id} added to video - '
                                       f'sleeping {sleep_time:.4f}s')
@@ -848,7 +902,8 @@ class ObjectDetector(object):
                 finally:
                     video_writer.release()
                     log.debug(LOGGER_OBJECT_DETECTION_ASYNC_RECORD_VIDEO,
-                              msg=f'Recording completed, released video writer.')
+                              msg=f'Recording completed, '
+                                  f'released video writer.')
                 path = shutil.copy(local_file_path, os.path.join(os.getcwd()))
                 try:
                     filename = local_file_path.split('/')[-1]
@@ -869,7 +924,8 @@ class ObjectDetector(object):
                              msg=f'Deleted {path}.')
                 except asyncio.futures.CancelledError:
                     log.warning(LOGGER_OBJECT_DETECTION_ASYNC_RECORD_VIDEO,
-                                msg=f'Cancelled the video recording at pause time.')
+                                msg=f'Cancelled the video recording '
+                                    f'at pause time.')
                     raise asyncio.futures.CancelledError()
                 except:
                     log.error(LOGGER_OBJECT_DETECTION_ASYNC_RECORD_VIDEO,
@@ -905,10 +961,10 @@ class ObjectDetector(object):
                 # Create temp file
                 local_file_path = os.path.join(
                     tmpdirname,
-                    next(tempfile._get_candidate_names()) + self.__image_file_extension)
+                    next(tempfile._get_candidate_names()) + self.__image_file_extension)           # noqa e501
                 log.warning(LOGGER_OBJECT_DETECTION_ASYNC_SAVE_PICTURE,
-                            msg=f'Created file {local_file_path} to store temp '
-                                f'picture. Res = '
+                            msg=f'Created file {local_file_path} to '
+                                f'store temp picture. Res = '
                                 f'{self.display_image_resolution}')
                 try:
                     log.warning(LOGGER_OBJECT_DETECTION_ASYNC_SAVE_PICTURE,
@@ -918,8 +974,6 @@ class ObjectDetector(object):
                     else:
                         img = self.bgra_image_color_np[:, :, :3]
                     cv2.imwrite(local_file_path, img)
-                    # image_to_save = Image.fromarray(self.rgb_image_color_np)
-                    # image_to_save.save(local_file_path)
                 except Exception:
                     raise Exception()
                 finally:
@@ -954,7 +1008,8 @@ class ObjectDetector(object):
                                   f'{traceback.print_exc()}')
             duration = time.time() - start_time
             log.debug(LOGGER_OBJECT_DETECTION_ASYNC_SAVE_PICTURE,
-                      msg=f'Snapping and upload of picture took {duration:.3f}s')
+                      msg=f'Snapping and upload of picture '
+                          f'took {duration:.3f}s')
         except asyncio.futures.CancelledError:
             log.warning(LOGGER_OBJECT_DETECTION_ASYNC_SAVE_PICTURE,
                         msg=f'Cancelled the picture saving task.')
@@ -978,7 +1033,8 @@ class ObjectDetector(object):
             local_file_path : str, absolute path of object to be uploaded
             target_blob_filename : str, target of the blob on Azure. / will be
                 intepreted as a directory.
-            content_type: str, mimetype, of file being uploaded, video/x-msvideo
+            content_type: str, mimetype, of file being uploaded, '
+                video/x-msvideo
         Returns :
             Sucess or None if failed.
         """
@@ -1024,15 +1080,13 @@ class ObjectDetector(object):
                     log.warning(
                         LOGGER_OBJECT_DETECTION_ASYNC_UPLOAD_FILE_TO_AZURE,
                         msg=f'Container {container_name} created.')
-                # filename = local_file_path.split('/')[-1]
-                # target_filename = os.path.join(
-                #     datetime.datetime.now().strftime("%Y/%m/%d/%H"),
-                #     filename)
-                blob_client = container_client.get_blob_client(target_blob_filename)
-                log.warning(LOGGER_OBJECT_DETECTION_ASYNC_UPLOAD_FILE_TO_AZURE,
-                            msg=f'Uploading local file {local_file_path} to '
-                                f'blob {target_blob_filename} in container '
-                                f'{container_name}.')
+                blob_client = container_client.get_blob_client(
+                    target_blob_filename)
+                log.warning(
+                    LOGGER_OBJECT_DETECTION_ASYNC_UPLOAD_FILE_TO_AZURE,
+                    msg=f'Uploading local file {local_file_path} to '
+                        f'blob {target_blob_filename} in container '
+                        f'{container_name}.')
                 try:
                     metadata = {
                         'create_time': datetime.datetime.now().strftime(
@@ -1047,13 +1101,16 @@ class ObjectDetector(object):
                             content_settings=ContentSettings(
                                 content_type=content_type))
                 except Exception:
-                    log.error(LOGGER_OBJECT_DETECTION_ASYNC_UPLOAD_FILE_TO_AZURE,
-                              msg=f'Error uploading blob {traceback.print_exc()}')
-                log.warning(LOGGER_OBJECT_DETECTION_ASYNC_UPLOAD_FILE_TO_AZURE,
-                            msg=f'Upload completed.')
+                    log.error(
+                        LOGGER_OBJECT_DETECTION_ASYNC_UPLOAD_FILE_TO_AZURE,
+                        msg=f'Error uploading blob {traceback.print_exc()}')
+                log.warning(
+                    LOGGER_OBJECT_DETECTION_ASYNC_UPLOAD_FILE_TO_AZURE,
+                    msg=f'Upload completed.')
         except asyncio.futures.CancelledError:
-            log.warning(LOGGER_OBJECT_DETECTION_ASYNC_UPLOAD_FILE_TO_AZURE,
-                        msg=f'Cancelled the video uploading task.')
+            log.warning(
+                LOGGER_OBJECT_DETECTION_ASYNC_UPLOAD_FILE_TO_AZURE,
+                msg=f'Cancelled the video uploading task.')
         except Exception:
             log.error(LOGGER_OBJECT_DETECTION_ASYNC_UPLOAD_FILE_TO_AZURE,
                       msg=f'Error uploading file to azure : '
@@ -1071,7 +1128,8 @@ class ObjectDetector(object):
             log.warning(LOGGER_ASYNC_RUN_DETECTION,
                         msg=f'Run detection task started...')
             headers = {'Content-Type': 'application/json'}
-            hostname = self.configuration['object_detector']['endpoint_hostname']
+            hostname = \
+                self.configuration['object_detector']['endpoint_hostname']
             port = self.configuration['object_detector']['endpoint_port']
             path = self.configuration['object_detector']['endpoint_path']
             model_url = f'http://{hostname}:{port}/{path}'
@@ -1105,7 +1163,8 @@ class ObjectDetector(object):
                             if response.status == 200:
                                 body = await response.json()
                                 log.debug(LOGGER_ASYNC_RUN_DETECTION,
-                                          msg=f'Got model response... iteration {n_loops}')
+                                          msg=f'Got model response... '
+                                              f'iteration {n_loops}')
                                 task_start_time = time.time()
                                 # Post results to queue to be consumed by
                                 # thread_object_detection_pool_manager
@@ -1118,11 +1177,11 @@ class ObjectDetector(object):
                                         block=True,
                                         timeout=2)
                                 except queue.Full:
-                                    log.critical(LOGGER_ASYNC_RUN_DETECTION,
-                                                 msg=f'OD Queue full. Pls investigate '
-                                                     f'refresh_tracked_objects. Is it running, '
-                                                     f'blocked or canceled?')
-                                    # raise Exception('OD Queue full, Pls investigate')
+                                    log.critical(
+                                        LOGGER_ASYNC_RUN_DETECTION,
+                                        msg=f'OD Queue full. Pls investigate '
+                                            f'refresh_tracked_objects. Is it '
+                                            f'running, blocked or canceled?')
                                 task_duration += time.time() - task_start_time
                                 loop_time += (end_time - start_time)
                                 n_loops += 1
@@ -1130,17 +1189,21 @@ class ObjectDetector(object):
                                     task_duration /= logging_loops
                                     loop_time /= logging_loops
                                     log.debug(LOGGER_ASYNC_RUN_DETECTION,
-                                              msg=f'Average loop for the past {logging_loops} '
-                                                  f'iteration is {loop_time:.3f}s')
+                                              msg=f'Average loop for the '
+                                                  f'past {logging_loops} '
+                                                  f'iteration is '
+                                                  f'{loop_time:.3f}s')
                                     log.debug(LOGGER_ASYNC_RUN_DETECTION,
-                                              msg=f'Average task time for past {logging_loops} '
-                                                  f'iterations is {task_duration:.3f}s')
+                                              msg=f'Average task time for '
+                                                  f'past {logging_loops} '
+                                                  f'iterations is '
+                                                  f'{task_duration:.3f}s')
                                     loop_time = 0
                                     task_duration = 0
                             else:
                                 raise Exception(f'HTTP response code is '
-                                                f'{response.status} for detection'
-                                                f' service...')
+                                                f'{response.status} for '
+                                                f'detection service...')
                     except ClientConnectorError as err:
                         if back_off_retry + 5 <= 60:
                             back_off_retry += 5
@@ -1163,7 +1226,7 @@ class ObjectDetector(object):
                         log.error(LOGGER_ASYNC_RUN_DETECTION,
                                   msg=f'HTTP prediction service error: '
                                       f'{traceback.print_exc()} -> sleeping '
-                                      f'{self.time_between_scoring_service_calls}s '
+                                      f'{self.time_between_scoring_service_calls}s '       # noqa e501
                                       f'and continuing')
                         await asyncio.sleep(back_off_retry)
                     except Exception:
@@ -1172,7 +1235,7 @@ class ObjectDetector(object):
                         back_off_retry = 0
                 # Pause for loopDelay seconds
                 duration = time.time() - start_time
-                sleep_time = max(0, self.time_between_scoring_service_calls - duration)
+                sleep_time = max(0, self.time_between_scoring_service_calls - duration)        # noqa e501
                 await asyncio.sleep(sleep_time)
         except asyncio.futures.CancelledError:
             log.warning(LOGGER_ASYNC_RUN_DETECTION,
@@ -1182,9 +1245,10 @@ class ObjectDetector(object):
                       f'Error : {traceback.print_exc()}')
             raise Exception(f'Error : {traceback.print_exc()}')
 
-    def thread_object_detection_pool_manager(self,
-                                             exit_detection_pool_manager_thread_event: threading.Event,
-                                             loop_delay=0.25):
+    def thread_object_detection_pool_manager(
+        self,
+        exit_detection_pool_manager_thread_event: threading.Event,        # noqa e501
+        loop_delay: float = 0.25):
         """
         Description
             Maintains a list of processes and threads per object that's being
@@ -1192,14 +1256,16 @@ class ObjectDetector(object):
                 During its processing, self.tracked_objects_mp would
                 look like this:
                     {
-                        object_uuid_1 : {tracked_object, process_id, thread_id, },
-                        object_uuid_2 : {tracked_object, process_id, thread_id, }
+                        object_uuid_1 :
+                            {tracked_object, process_id, thread_id, },
+                        object_uuid_2 :
+                            {tracked_object, process_id, thread_id, }
                     }
         Args:
             exit_thread_event : <class 'threading.Event()'> : used to signal
                 process it's time to end.
-            loop_delay : float : delay in the while true loop to ensure no high
-                cpu usage for nothing.
+            loop_delay : float : delay in the while true loop to
+                ensure no high cpu usage for nothing.
         """
         object_counter = 0
         while not exit_detection_pool_manager_thread_event.is_set():
@@ -1213,18 +1279,22 @@ class ObjectDetector(object):
                     new_tf_info_queue = mp.Manager().Queue(maxsize=1)
                     tracking_object_queue = mp.Manager().Queue(maxsize=1)
                     exit_thread_event = threading.Event()
-                    proc = ObjectTrackingProcess(tracked_object=new_object,
-                                                 tracker_alg=self.default_tracker,
-                                                 initial_image=self.rgb_image_color_np_resized,
-                                                 frame_duration=self.frame_duration,
-                                                 image_queue=self.image_queue.register(name=str(new_object_id)),
-                                                 new_tf_info_queue=new_tf_info_queue,
-                                                 tracking_object_queue=tracking_object_queue)
-                    thread = threading.Thread(target=self.thread_poll_object_tracking_process_queue,
-                                              args=([new_object,
-                                                     tracking_object_queue,
-                                                     exit_thread_event]),
-                                              name=f'thread_poll_object_tracking_{str(new_object_id)[:8]}')
+                    proc = ObjectTrackingProcess(
+                        tracked_object=new_object,
+                        tracker_alg=self.default_tracker,
+                        initial_image=self.rgb_image_color_np_resized,
+                        frame_duration=self.frame_duration,
+                        image_queue=self.image_queue.register(
+                            name=str(new_object_id)),
+                        new_tf_info_queue=new_tf_info_queue,
+                        tracking_object_queue=tracking_object_queue)
+                    thread = threading.Thread(
+                        target=self.thread_poll_object_tracking_process_queue,
+                        args=([new_object,
+                               tracking_object_queue,
+                               exit_thread_event]),
+                        name=f'thread_poll_object_tracking_'
+                             f'{str(new_object_id)[:8]}')
                     # Keep track of what is under observation
                     self.tracked_objects_mp[new_object_id] = {
                         'tracked_object': new_object,
@@ -1236,66 +1306,88 @@ class ObjectDetector(object):
                         'exit_thread_event': exit_thread_event,
                         'flag_for_kill': False
                     }
-                    log.warning(LOGGER_OBJECT_DETECTION_OBJECT_DETECTION_POOL_MANAGER,
-                                msg=f'Creating proc/thread mapping for new object {new_object_id[:8]}')
+                    log.warning(
+                        LOGGER_OBJECT_DETECTION_OBJECT_DETECTION_POOL_MANAGER,
+                        msg=f'Creating proc/thread mapping for new '
+                            f'object {new_object_id[:8]}')
                     object_counter += 1
                     proc.start()
-                    log.info(LOGGER_OBJECT_DETECTION_OBJECT_DETECTION_POOL_MANAGER,
-                             msg=f'Manager launched process {proc.pid} for object {new_object_id[:8]}.')
+                    log.info(
+                        LOGGER_OBJECT_DETECTION_OBJECT_DETECTION_POOL_MANAGER,
+                        msg=f'Manager launched process {proc.pid} '
+                            f'for object {new_object_id[:8]}.')
                     thread.name += f'_pid{proc.pid}'
                     thread.start()
-                    log.info(LOGGER_OBJECT_DETECTION_OBJECT_DETECTION_POOL_MANAGER,
-                             msg=f'Manager launched thread for object {new_object_id[:8]}.')
+                    log.info(
+                        LOGGER_OBJECT_DETECTION_OBJECT_DETECTION_POOL_MANAGER,
+                        msg=f'Manager launched thread for '
+                            f'object {new_object_id[:8]}.')
                     new_object.monitored = True
                 # Stop proc/thread for deleted items
                 for (deleted_object_id, deleted_object) in \
                         deleted_objects_dict.items():
-                    log.warning(LOGGER_OBJECT_DETECTION_OBJECT_DETECTION_POOL_MANAGER,
-                                msg=f'Marking proc/thread mapping of object {deleted_object_id[:8]} for deletion')
-                    self.tracked_objects_mp[deleted_object_id]['flag_for_kill'] = True
-                    self.tracked_objects_mp[deleted_object_id]['reason'] = UNDETECTED
+                    log.warning(
+                        LOGGER_OBJECT_DETECTION_OBJECT_DETECTION_POOL_MANAGER,
+                        msg=f'Marking proc/thread mapping of '
+                            f'object {deleted_object_id[:8]} for deletion')
+                    self.tracked_objects_mp[deleted_object_id][
+                        'flag_for_kill'] = True
+                    self.tracked_objects_mp[deleted_object_id][
+                        'reason'] = UNDETECTED
                 # Check tracked_objects sanity, flag for kill if required
                 for (obj_id, tracked_object_mapping_dict) in \
                         self.tracked_objects_mp.items():
-                    # Check if object related process/thread should be purged (unseen for 5 seconds)
+                    # Check if object related process/thread should
+                    # be purged (unseen for 5 seconds)
                     proc = tracked_object_mapping_dict['proc']
                     thread = tracked_object_mapping_dict['thread']
-                    tracked_object_mp = tracked_object_mapping_dict['tracked_object']
+                    tracked_object_mp = \
+                        tracked_object_mapping_dict['tracked_object']
                     # If object unseen for X seconds:
                     unseen_time = time.time() - tracked_object_mp.last_seen
                     if unseen_time > self.max_unseen_time_for_object:
                         tracked_object_mapping_dict['flag_for_kill'] = True
                         tracked_object_mapping_dict['reason'] = UNSEEN
-                        log.warning(LOGGER_OBJECT_DETECTION_OBJECT_DETECTION_POOL_MANAGER,
-                                    msg=f'Marking proc/thread mapping of object {obj_id[:8]} '
-                                        f'for deletion, unseen for {unseen_time:.2f}s')
-                    # verify if object proc and thread are healthy - if thread or proc is dead, kill tracker
+                        log.warning(LOGGER_OBJECT_DETECTION_OBJECT_DETECTION_POOL_MANAGER,         # noqa e501
+                                    msg=f'Marking proc/thread mapping of '
+                                        f'object {obj_id[:8]} for deletion, '
+                                        f'unseen for {unseen_time:.2f}s')
+                    # verify if object proc and thread are healthy
+                    # if thread or proc is dead, kill tracker
                     elif not (proc.is_alive() and thread.is_alive()):
                         tracked_object_mapping_dict['flag_for_kill'] = True
                         tracked_object_mapping_dict['reason'] = UNSTABLE
-                        log.warning(LOGGER_OBJECT_DETECTION_OBJECT_DETECTION_POOL_MANAGER,
-                                    msg=f'Marking proc/thread mapping of object {obj_id[:8]} '
-                                        f'for deletion, proc or thread is stopped, '
-                                        f'need to get back to stable state')
-                # Call function that kills the threads/procs that need cleanup
-                nb_obj_to_delete = len({k: v for (k, v) in self.tracked_objects_mp.items() if v['flag_for_kill']})
+                        log.warning(LOGGER_OBJECT_DETECTION_OBJECT_DETECTION_POOL_MANAGER,             # noqa e501
+                                    msg=f'Marking proc/thread mapping of '
+                                        f'object {obj_id[:8]} for deletion, '
+                                        f'proc or thread is stopped, need to '
+                                        f'get back to stable state')
+                # Call function that kills the threads/procs
+                # that need cleanup
+                nb_obj_to_delete = len(
+                    {k: v for (k, v) in self.tracked_objects_mp.items() if v['flag_for_kill']})        # noqa e501
                 if nb_obj_to_delete > 0:
                     objs_to_remove_from_dict = self.remove_tracked_objects()
                     with self.lock_tracked_objects_mp:
                         for obj in objs_to_remove_from_dict:
                             self.tracked_objects_mp.pop(obj)
                 time.sleep(loop_delay)
-                log.info(LOGGER_OBJECT_DETECTION_OBJECT_DETECTION_POOL_MANAGER,
-                         msg=f'Currently monitoring {len(self.tracked_objects_mp)} objects')
+                log.info(
+                    LOGGER_OBJECT_DETECTION_OBJECT_DETECTION_POOL_MANAGER,
+                    msg=f'Currently monitoring '
+                        f'{len(self.tracked_objects_mp)} objects')
             except:
-                self.thread_exception_queue.put('thread_object_detection_pool_manager', sys.exc_info())
-                # raise Exception(f'Problem : {traceback.print_exc()}')
+                self.thread_exception_queue.put(
+                    'thread_object_detection_pool_manager',
+                    sys.exc_info())
         log.critical(LOGGER_OBJECT_DETECTION_OBJECT_DETECTION_POOL_MANAGER,
-                     msg=f'Exiting thread "thread_object_detection_pool_manager". '
+                     msg=f'Exiting thread '
+                         f'"thread_object_detection_pool_manager". '
                          f'Should not happen unless stopping robot.')
 
-    def remove_tracked_objects(self,
-                               all_objects=False) -> None:   # , tracked_objects):
+    def remove_tracked_objects(
+            self,
+            all_objects: bool = False) -> None:
         """
         Description:
             Function used to garbage collect (remove unused threads and
@@ -1315,12 +1407,12 @@ class ObjectDetector(object):
                     {k: v for k, v in self.tracked_objects_mp.items()}
             else:
                 to_be_killed_tracked_objects = \
-                    {k: v for k, v in self.tracked_objects_mp.items() if v['flag_for_kill']}
-            for (obj_id, tracked_object_dict) in to_be_killed_tracked_objects.items():
+                    {k: v for k, v in self.tracked_objects_mp.items() if v['flag_for_kill']}           # noqa e501
+            for (obj_id, tracked_object_dict) in \
+                    to_be_killed_tracked_objects.items():
                 proc = tracked_object_dict['proc']
                 thread = tracked_object_dict['thread']
                 exit_thread_event = tracked_object_dict['exit_thread_event']
-                # tracking_object_queue = tracked_object_dict['tracking_object_queue']
 
                 # Signal thread it's time to stop (use a threading.event?)
                 exit_thread_event.set()
@@ -1328,28 +1420,31 @@ class ObjectDetector(object):
                     thread.join(2)  # Wait up to X sec
                     if thread.is_alive():
                         log.warning(LOGGER_OBJECT_DETECTION_KILL,
-                                    msg=f'Failed to cancel thread for object {obj_id}.')
+                                    msg=f'Failed to cancel thread '
+                                        f'for object {obj_id}.')
                 log.warning(LOGGER_OBJECT_DETECTION_KILL,
-                            msg=f'Thread for object {obj_id[:8]} is terminated.')
+                            msg=f'Thread for object {obj_id[:8]} '
+                                f'is terminated.')
 
                 # Signal process it's time to stop
                 proc.exit.set()
                 while proc.is_alive():
                     log.warning(LOGGER_OBJECT_DETECTION_KILL,
-                                msg=f'Attempting to cancel PID {proc.pid} for '
-                                    f'object {obj_id[:8]}.')
+                                msg=f'Attempting to cancel PID {proc.pid} '
+                                    f'for object {obj_id[:8]}.')
                     proc.join(2)  # Wait up to X sec
                     exitcode = proc.exitcode
                     log.warning(LOGGER_OBJECT_DETECTION_KILL,
-                                msg=f'PID {proc.pid}\'s exit code is {exitcode} '
-                                    f'for {obj_id[:8]}.')
+                                msg=f'PID {proc.pid}\'s exit code is '
+                                    f'{exitcode} for {obj_id[:8]}.')
                 log.warning(LOGGER_OBJECT_DETECTION_KILL,
                             msg=f'PID {proc.pid} for object '
                                 f'{obj_id[:8]} is terminated.')
 
                 # Remove from dict altogether
                 log.warning(LOGGER_OBJECT_DETECTION_KILL,
-                            msg=f'Adding object {str(obj_id)[:8]} to removal list (for mapping dictionnary).')
+                            msg=f'Adding object {str(obj_id)[:8]} to removal '
+                                f'list (for mapping dictionnary).')
                 list_uuids.append(obj_id)
 
                 # Unregister specific image_queue from PublisQueue
@@ -1364,14 +1459,15 @@ class ObjectDetector(object):
         finally:
             return list_uuids
 
-    def thread_poll_object_tracking_process_queue(self,
-                                                  tracked_object_mp: TrackedObjectMP,
-                                                  tracked_object_queue: mp.Queue,
-                                                  exit_thread_event: threading.Event):
+    def thread_poll_object_tracking_process_queue(
+            self,
+            tracked_object_mp: TrackedObjectMP,
+            tracked_object_queue: mp.Queue,
+            exit_thread_event: threading.Event):
         """
-        Description: thread to monitor objects and retrieve updated bounding box
-            coordinates - these are calculated in the associated process. Need
-            to run one per tracked object.
+        Description: thread to monitor objects and retrieve updated bounding
+            box coordinates - these are calculated in the associated process.
+            Need to run one per tracked object.
         Args:
             tracked_object_mp : <class TrackedObjectMP()>, object that this
                 thread is tracking the bounding box for
@@ -1381,12 +1477,12 @@ class ObjectDetector(object):
                 process it's time to end.
         """
         try:
-            log.warning(LOGGER_OBJECT_DETECTION_THREAD_POLL_OBJECT_TRACKING_PROCESS_QUEUE,
+            log.warning(LOGGER_OBJECT_DETECTION_THREAD_POLL_OBJECT_TRACKING_PROCESS_QUEUE,         # noqa e501
                         msg=f'Launching thread for object ID '
                             f'{str(tracked_object_mp.id)[:8]}')
             while not exit_thread_event.is_set():
-                # Replace object in tracked object with what we get from the queue
-                # wait max 2 second
+                # Replace object in tracked object with what we get f
+                # rom the queue wait max 2 second
                 new_tracked_object_mp = tracked_object_queue.get(
                     block=True, timeout=2)
                 obj_id = str(new_tracked_object_mp.id)
@@ -1398,20 +1494,21 @@ class ObjectDetector(object):
                     obj.object_class = new_tracked_object_mp.object_class
                 else:
                     # If object not there, end thread
-                    log.warning(LOGGER_OBJECT_DETECTION_THREAD_POLL_OBJECT_TRACKING_PROCESS_QUEUE,
+                    log.warning(LOGGER_OBJECT_DETECTION_THREAD_POLL_OBJECT_TRACKING_PROCESS_QUEUE,      # noqa e501
                                 msg=f'Not finding object {obj_id[:8]}.. '
                                     f'in self.tracked_objects_mp.')
                     break
         except queue.Empty:
-            log.warning(LOGGER_OBJECT_DETECTION_THREAD_POLL_OBJECT_TRACKING_PROCESS_QUEUE,
+            log.warning(LOGGER_OBJECT_DETECTION_THREAD_POLL_OBJECT_TRACKING_PROCESS_QUEUE,      # noqa e501
                         msg=f'No new object was placed on the queue, '
                             f'tracking process may have been terminated '
                             f'by parent process.')
         except:
             raise Exception(f'Problem: {traceback.print_exc()}')
         finally:
-            log.warning(LOGGER_OBJECT_DETECTION_THREAD_POLL_OBJECT_TRACKING_PROCESS_QUEUE,
-                        msg=f'Ending thread handling object {str(tracked_object_mp.id)[:8]}')
+            log.warning(LOGGER_OBJECT_DETECTION_THREAD_POLL_OBJECT_TRACKING_PROCESS_QUEUE,      # noqa e501
+                        msg=f'Ending thread handling object '
+                            f'{str(tracked_object_mp.id)[:8]}')
 
     def kill_switch(self):
         try:
@@ -1439,8 +1536,8 @@ class ObjectDetector(object):
     def __fix_category_index_dict(self):
         """
         Description:
-            Fixes the category index so that instead of strings describing colors,
-                we have tuples
+            Fixes the category index so that instead of strings
+                describing colors, we have tuples
         Args:
             None
         """
@@ -1448,7 +1545,8 @@ class ObjectDetector(object):
             for (k, v) in class_dict.items():
                 if k == 'rect_color' or k == 'text_color':
                     # Convert the string values to tuple
-                    self.category_index[class_id][k] = tuple(map(int, v.strip('(').strip(')').split(',')))
+                    self.category_index[class_id][k] = tuple(
+                        map(int, v.strip('(').strip(')').split(',')))
 
     def __update_image_with_info(self,
                                  img,
@@ -1477,14 +1575,19 @@ class ObjectDetector(object):
                 x, y, w, h = obj.get_bbox(
                     fmt='tracker',
                     use_normalized_coordinates=True)
-                rect_color = self.category_index[str(int(obj.object_class))]['rect_color']
-                text_color = self.category_index[str(int(obj.object_class))]['text_color']
-                class_str = self.category_index[str(int(obj.object_class))]['class_name']
+                rect_color = self.category_index[
+                    str(int(obj.object_class))]['rect_color']
+                text_color = self.category_index[
+                    str(int(obj.object_class))]['text_color']
+                class_str = self.category_index[
+                    str(int(obj.object_class))]['class_name']
                 # Top section
                 top_str_1 = f'Class: {class_str}'
                 top_str_2 = f'UUID: {str_uuid}'
-                x_size_top_str_1 = cv2.getTextSize(top_str_1, cv2.FONT_HERSHEY_SIMPLEX, 0.75, 2)[0][0] + 10
-                x_size_top_str_2 = cv2.getTextSize(top_str_2, cv2.FONT_HERSHEY_SIMPLEX, 0.75, 2)[0][0] + 10
+                x_size_top_str_1 = cv2.getTextSize(
+                    top_str_1, cv2.FONT_HERSHEY_SIMPLEX, 0.75, 2)[0][0] + 10
+                x_size_top_str_2 = cv2.getTextSize(
+                    top_str_2, cv2.FONT_HERSHEY_SIMPLEX, 0.75, 2)[0][0] + 10
                 x_size_top_str = max(x_size_top_str_1, x_size_top_str_2)
                 # Bottom section
                 bottom_str_1 = f'Score: {obj.score*100:.2f}%'
@@ -1493,15 +1596,21 @@ class ObjectDetector(object):
                 else:
                     bottom_str_1 += f' - Dist. : Too close.'
                 if obj.coords_3d_coordinates_center_point:
-                    bottom_str_2 = f'Coords : (' + \
-                        f'{obj.coords_3d_coordinates_center_point[0]:.1f}, ' + \
-                        f'{obj.coords_3d_coordinates_center_point[1]:.1f}, ' + \
-                        f'{obj.coords_3d_coordinates_center_point[2]:.1f})'
+                    bottom_str_2 = (
+                        f'Coords : ('
+                        f'{obj.coords_3d_coordinates_center_point[0]:.1f}, '
+                        f'{obj.coords_3d_coordinates_center_point[1]:.1f}, '
+                        f'{obj.coords_3d_coordinates_center_point[2]:.1f})')
                 else:
                     bottom_str_2 = f'Coords: Can\'t compute coords.'
-                x_size_bottom_str_1 = cv2.getTextSize(bottom_str_1, cv2.FONT_HERSHEY_SIMPLEX, 0.75, 2)[0][0] + 10
-                x_size_bottom_str_2 = cv2.getTextSize(bottom_str_2, cv2.FONT_HERSHEY_SIMPLEX, 0.75, 2)[0][0] + 10
-                x_size_bottom_str = max(x_size_bottom_str_1, x_size_bottom_str_2)
+                x_size_bottom_str_1 = cv2.getTextSize(
+                    bottom_str_1,
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.75, 2)[0][0] + 10
+                x_size_bottom_str_2 = cv2.getTextSize(
+                    bottom_str_2,
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.75, 2)[0][0] + 10
+                x_size_bottom_str = \
+                    max(x_size_bottom_str_1, x_size_bottom_str_2)
                 # Denormalize coordinates
                 x = int(x * width)
                 y = int(y * height)
@@ -1509,34 +1618,86 @@ class ObjectDetector(object):
                 h = int(h * height)
 
                 # Main bounding box
-                overlay = cv2.rectangle(cv2.UMat(overlay).get(), (x, y), (x + w, y + h), rect_color, 4)
+                overlay = cv2.rectangle(
+                    cv2.UMat(overlay).get(),
+                    (x, y),
+                    (x + w, y + h),
+                    rect_color,
+                    4)
                 # Top left box with information
-                overlay = cv2.rectangle(overlay, (x, y - 63), (x + x_size_top_str, y), rect_color, thickness=-1)
-                overlay = cv2.putText(overlay, top_str_1, (x + 5, y - 40), cv2.FONT_HERSHEY_SIMPLEX, 0.75, text_color, 2)
-                overlay = cv2.putText(overlay, top_str_2, (x + 5, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.75, text_color, 2)
+                overlay = cv2.rectangle(
+                    overlay,
+                    (x, y - 63),
+                    (x + x_size_top_str, y),
+                    rect_color,
+                    thickness=-1)
+                overlay = cv2.putText(
+                    overlay,
+                    top_str_1,
+                    (x + 5, y - 40),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.75,
+                    text_color,
+                    2)
+                overlay = cv2.putText(
+                    overlay,
+                    top_str_2,
+                    (x + 5, y - 10),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.75,
+                    text_color,
+                    2)
                 # Bottom left box with information
-                overlay = cv2.rectangle(overlay, (x, y + h), (x + x_size_bottom_str, y + h + 60), rect_color, thickness=-1)
-                overlay = cv2.putText(overlay, bottom_str_1, (x + 5, y + h + 22), cv2.FONT_HERSHEY_SIMPLEX, 0.75, text_color, 2)
-                overlay = cv2.putText(overlay, bottom_str_2, (x + 5, y + h + 52), cv2.FONT_HERSHEY_SIMPLEX, 0.75, text_color, 2)
-            output = cv2.addWeighted(cv2.UMat(overlay).get(), alpha, cv2.UMat(output).get(), (1 - alpha), 0, cv2.UMat(output).get())
+                overlay = cv2.rectangle(
+                    overlay,
+                    (x, y + h),
+                    (x + x_size_bottom_str, y + h + 60),
+                    rect_color,
+                    thickness=-1)
+                overlay = cv2.putText(
+                    overlay,
+                    bottom_str_1,
+                    (x + 5, y + h + 22),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.75,
+                    text_color,
+                    2)
+                overlay = cv2.putText(
+                    overlay,
+                    bottom_str_2,
+                    (x + 5, y + h + 52),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.75,
+                    text_color,
+                    2)
+            output = cv2.addWeighted(
+                cv2.UMat(overlay).get(),
+                alpha,
+                cv2.UMat(output).get(),
+                (1 - alpha),
+                0,
+                cv2.UMat(output).get())
             return output
         except Exception:
             log.warning(LOGGER_OBJECT_DETECTION_UPDATE_IMG_WITH_INFO,
                         msg=f'Problem in __update_image_with_info')
-            raise Exception(f'Problem in __update_image_with_info : trace = {traceback.print_exc()}')
+            raise Exception(f'Problem in __update_image_with_info : '
+                            f'trace = {traceback.print_exc()}')
 
-    def refresh_tracked_objects(self,
-                                image_shape):
+    def refresh_tracked_objects(
+            self,
+            image_shape):
         """
         Description:
-            Refresh tracked objects, that is make sure the list of tracked_objects
-                by the bot is reflecting current detections and tracking outputs.
+            Refresh tracked objects, that is make sure the list of
+                tracked_objects by the bot is reflecting current
+                detections and tracking outputs.
         Args:
             image_shape : tuple (height, width) in pixels
         Returns:
-            new_objects and deleted_objects : 2 dictionnaries containing objects to
-                create/track or delete/untrack. Format of dict is
-                uuid:tracked_object_mp.
+            new_objects and deleted_objects : 2 dictionnaries
+                containing objects to create/track or delete/untrack.
+                Format of dict is uuid:tracked_object_mp.
         """
         try:
             height, width = image_shape
@@ -1550,7 +1711,8 @@ class ObjectDetector(object):
             # Find #boxes with score > thresh or max tracked objects
             nb_bb = min(
                 self.max_tracked_objects,
-                np.sum(np.array(detection_scores[0]) > self.detection_threshold))
+                np.sum(
+                    np.array(detection_scores[0]) > self.detection_threshold))
             # Create a list of BoundingBoxes > thresh
             bb_list = [BoundingBox(box=box,
                                    image_height=height,
@@ -1562,7 +1724,8 @@ class ObjectDetector(object):
             # Find best fitting BB for each tracked object and
             # add to temp list
             temp_existing_tracked_objects_mp = {}
-            for (obj_id, tracked_object_dict) in self.tracked_objects_mp.items():
+            for (obj_id, tracked_object_dict) in \
+                    self.tracked_objects_mp.items():
                 # Find best overlapping bounding box
                 target_bb_idx = tracked_object_dict['tracked_object']\
                     .get_max_overlap_bb(bb_list)
@@ -1665,16 +1828,21 @@ class ObjectDetector(object):
                 distance = np.round(np.average(cropped_depth_map))
                 obj.distance = distance
                 log.debug(LOGGER_OBJECT_DETECTION_GET_DISTANCE_FROM_K4A,
-                          msg=f'****** DIST CALCULATED {uuid[:8]} = {obj.distance}')
+                          msg=f'****** DIST CALCULATED '
+                              f'{uuid[:8]} = {obj.distance}')
                 center_point = [max(int(x + w / 2), x_res - 1),
                                 max(int(y + h / 2), y_res - 1)]
-                depth_center_point = self.image_depth_np_resized[center_point[1], center_point[0]]
-                (valid, coords) = self.k4a_device_calibration.convert_2d_to_3d(
-                    center_point,
-                    depth_center_point)
+                depth_center_point = self.image_depth_np_resized[
+                    center_point[1],
+                    center_point[0]]
+                (valid, coords) = \
+                    self.k4a_device_calibration.convert_2d_to_3d(
+                        center_point,
+                        depth_center_point)
                 if valid:
                     obj.coords_3d_coordinates_center_point = coords
                 else:
                     obj.coords_3d_coordinates_center_point = None
         except Exception:
-            raise Exception(f'Problem with __get_distance_from_k4a : {traceback.print_exc()}')
+            raise Exception(f'Problem with __get_distance_from_k4a : '
+                            f'{traceback.print_exc()}')
