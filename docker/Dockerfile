@@ -128,9 +128,20 @@ RUN pip3 install jupyter matplotlib image
 RUN pip3 uninstall -y enum34 
 RUN pip3 install jupyterlab flake8 debugpy paho-mqtt aiohttp azure-storage-blob==12.3.0 azure-identity imagezmq
 RUN apt-get install -y libcanberra-gtk-module libcanberra-gtk3-module
-# PATCH FOR K4A
-# COPY docker/libk4a.so.1.4.0 /usr/lib/aarch64-linux-gnu
+
 RUN pip3 install git+https://github.com/etiennedub/pyk4a.git@develop
+
+# MANUAL PATCH FOR K4A 1.4.1 BETA
+COPY docker/libk4a.so.1.4.1 /usr/lib/aarch64-linux-gnu
+COPY docker/libk4arecord.so.1.4.1 /usr/lib/aarch64-linux-gnu
+COPY docker/libdepthengine.so.2.0 /usr/lib/aarch64-linux-gnu/libk4a1.4
+# Change symlinks
+RUN rm /usr/lib/aarch64-linux-gnu/libk4a.so && \
+    rm /usr/lib/aarch64-linux-gnu/libk4a.so.1.4 && \
+    rm /usr/lib/aarch64-linux-gnu/libk4arecord.so && \
+    rm /usr/lib/aarch64-linux-gnu/libk4arecord.so.1.4 && \
+    ln -s /usr/lib/aarch64-linux-gnu/libk4a.so.1.4.1 /usr/lib/aarch64-linux-gnu/libk4a.so.1.4 && \
+    ln -s /usr/lib/aarch64-linux-gnu/libk4arecord.so.1.4.1 /usr/lib/aarch64-linux-gnu/libk4arecord.so.1.4
 
 WORKDIR /app
 COPY config.json /app
