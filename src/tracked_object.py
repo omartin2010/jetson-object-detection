@@ -68,7 +68,8 @@ class BoundingBox(object):
             (self.x_min, self.y_min, self.x_max, self.y_max) = box
         if use_normalized_coordinates:
             if image_height is None or image_width is None:
-                raise Exception('Need to specify image width and height in constuctor')
+                raise Exception(
+                    f'Need to specify image width and height in constuctor')
             else:
                 self.x_min = int(self.x_min * image_width)
                 self.x_max = int(self.x_max * image_width)
@@ -84,7 +85,8 @@ class BoundingBox(object):
             Returns a tuple of the values in the cv2.trackers format
         Args:
             fmt: string, one of FMT_TRACKER, FMT_TF_BBOX, FMT_STANDARD
-            use_normalized_coordinates : bool, for tf_box and standard format only
+            use_normalized_coordinates : bool, for tf_box and standard
+                format only
         Returns
             format = tuple (a,b,c,d) with coordinates in the proper format
         """
@@ -295,7 +297,7 @@ class TrackedObjectMP(object):
         """
         Description:
             Returns the BoundingBox object of the current object tracker
-        Args : 
+        Args :
             None
         Returns : <Class BoundingBox> object
         """

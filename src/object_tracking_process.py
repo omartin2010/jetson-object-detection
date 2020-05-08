@@ -31,19 +31,22 @@ class ObjectTrackingProcess(Process):
         Description:
             Constructor for the class.
         Args:
-            tracked_object: <class 'TrackedObjectMP()'>, object tracked by process
-            tracker_alg : string, one of the values in OPENCV_OBJECT_TRACKERS
-            initial_image : numpy array containing the resized image that is used to
-                initialize the tracker
+            tracked_object: <class 'TrackedObjectMP()'>, object tracked by
+                process
+            tracker_alg : string, one of the values in
+                OPENCV_OBJECT_TRACKERS
+            initial_image : numpy array containing the resized image that
+                is used to initialize the tracker
             frame_duration : float, corresponds to the 1/FPS of input camera
             image_queue: <class 'multiprocessing.Queue()'> : contains images
-                that are pushed on it in numpy format when a new image was read
-                from the video capture
+                that are pushed on it in numpy format when a new image was
+                read from the video capture
             tracking_object_queue: <class 'multiprocessing.Queue()'> : queue to
                 publish the updated tracked_object_mp (incl. new bbox)
-            new_tf_info_queue : <class 'multiprocessing.Queue()'> : queue to contain
-                new tf_box, scores and classes discovered in the scoring thread to
-                refresh current bounding box that might have drifted over time.
+            new_tf_info_queue : <class 'multiprocessing.Queue()'> : queue to
+                contain new tf_box, scores and classes discovered in the
+                scoring thread to refresh current bounding box that might
+                have drifted over time.
         """
         Process.__init__(self)
         self.tracked_object = tracked_object
@@ -66,7 +69,9 @@ class ObjectTrackingProcess(Process):
                      f'{str(self.tracked_object.id)[:8]}')
             exitcode = 0
             tracker = OPENCV_OBJECT_TRACKERS[self.tracker_alg]()
-            _ = tracker.init(self.initial_image, self.tracked_object.get_bbox())
+            _ = tracker.init(
+                self.initial_image,
+                self.tracked_object.get_bbox())
             logging_loops = 100
             min_time_bw_identical_warnings = 1
             n_loops = 0
@@ -84,35 +89,40 @@ class ObjectTrackingProcess(Process):
                             timeout=retry_timeout)
                     except queue.Empty:
                         n_queue_errors += 1
-                        log.error(LOGGER_OBJECT_DETECTION_PROCESS_TRACK_OPENCV_OBJECT,
+                        log.error(LOGGER_OBJECT_DETECTION_PROCESS_TRACK_OPENCV_OBJECT,      # noqa E501
                                   msg=f'Empty image queue. Retrying in '
                                       f'{retry_timeout}s. Investigate '
                                       f'video capture.')
                         if n_queue_errors >= 5:
-                            log.critical(LOGGER_OBJECT_DETECTION_PROCESS_TRACK_OPENCV_OBJECT,
+                            log.critical(LOGGER_OBJECT_DETECTION_PROCESS_TRACK_OPENCV_OBJECT,   # noqa E501
                                          msg=f'Empty image queue for more '
                                              f'than 5 loops. Exiting proc.')
                             self.exit.set()
                     else:
                         height, width = image.shape[:2]
-                        # Get new coordinates of a scored image (via TF model scoring)
+                        # Get new coordinates of a scored image
+                        # (via TF model scoring)
                         try:
                             new_bbox = None
                             new_score = None
                             new_class = None
-                            new_bbox, new_score, new_class = self.new_tf_info_queue.get_nowait()
+                            new_bbox, new_score, new_class = \
+                                self.new_tf_info_queue.get_nowait()
                             tracker = None
-                            tracker = OPENCV_OBJECT_TRACKERS[self.tracker_alg]()
+                            tracker = \
+                                OPENCV_OBJECT_TRACKERS[self.tracker_alg]()
                             tracker.init(image, new_bbox.get_bbox())
                             self.tracked_object.set_bbox(new_bbox)
                             self.tracked_object.score = new_score
                             self.tracked_object.object_class = new_class
-                            log.info(LOGGER_OBJECT_DETECTION_PROCESS_TRACK_OPENCV_OBJECT,
+                            log.info(LOGGER_OBJECT_DETECTION_PROCESS_TRACK_OPENCV_OBJECT,          # noqa E501
                                      msg=f'Obtained new bbox from tensorflow '
-                                         f'(object id = {str(self.tracked_object.id)[:8]})')
-                        # If no TF scoring, queue is Empty ==> use tracker to find position
+                                         f'(object id = '
+                                         f'{str(self.tracked_object.id)[:8]})')
+                        # If no TF scoring, queue is Empty ==> use tracker to
+                        # find position
                         except queue.Empty:
-                            # Costly operation - update opencv tracker information
+                            # Costly operation - update opencv tracker info
                             (success, bbox) = tracker.update(image)
                             if success:
                                 self.tracked_object.set_bbox(
@@ -125,22 +135,28 @@ class ObjectTrackingProcess(Process):
                                 # fmt=FMT_TRACKER)
                             elif new_bbox:
                                 now = time.time()
-                                if now - last_warning_message_time > min_time_bw_identical_warnings:
+                                if now - last_warning_message_time \
+                                        > min_time_bw_identical_warnings:
                                     last_warning_message_time = now
                                     log.warning(
-                                        LOGGER_OBJECT_DETECTION_PROCESS_TRACK_OPENCV_OBJECT,
-                                        msg=f'Trying to reinitialize tracker for obj '
-                                            f'{str(self.tracked_object.id)[:8]} '
+                                        LOGGER_OBJECT_DETECTION_PROCESS_TRACK_OPENCV_OBJECT,    # noqa E501
+                                        msg=f'Trying to reinitialize tracker for obj {str(self.tracked_object.id)[:8]} '  # noqa E501
                                             f'with last bounding box info.')
                                 tracker = None
-                                tracker = OPENCV_OBJECT_TRACKERS[self.tracker_alg]()
+                                tracker = OPENCV_OBJECT_TRACKERS[
+                                    self.tracker_alg]()
                                 tracker.init(image, new_bbox.get_bbox())
                         except Exception:
-                            raise Exception(f'Problem : {traceback.print_exc()}')
+                            raise Exception(
+                                f'Problem : {traceback.print_exc()}')
                 # Dumping tracked_object to queue - unless exit flag unset
                 if not self.exit.is_set():
-                    # put box, score and class not to overried other metadata held in other process
-                    self.tracking_object_queue.put(self.tracked_object, block=True, timeout=2)
+                    # put box, score and class not to overried other
+                    # metadata held in other process
+                    self.tracking_object_queue.put(
+                        self.tracked_object,
+                        block=True,
+                        timeout=2)
                 # Sleep if required
                 loop_duration = time.time() - start_time
                 time.sleep(max(0, self.frame_duration - loop_duration))

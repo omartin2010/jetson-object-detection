@@ -26,7 +26,8 @@ def main():
     parser = argparse.ArgumentParser(description="Inference Program")
     parser.add_argument(
         '--config_file',
-        help=f'json configuration file containint params to initialize the jetson',
+        help=f'json configuration file containint params '
+             f'to initialize the jetson',
         type=str)
     args = parser.parse_args()
 

@@ -4,10 +4,9 @@ import logging
 
 class RoboLogger(object):
     """
-    Implementation of a logger object for debugging independently all parts of the
-    robot
-    CHANGE THAT TO A SINGLETON PATTERN  # TODO
-    https://gist.github.com/pazdera/1098129
+    Description : Implementation of a logger object for debugging
+        independently all parts of the robot
+        Singleton pattern : https://gist.github.com/pazdera/1098129
     """
     __slots__ = [
         'logger',
@@ -25,7 +24,8 @@ class RoboLogger(object):
         defaultLevel : logging.INFO, ...
         '''
         if RoboLogger.__instance is not None:
-            raise Exception("The RoboLogger class is a singleton - can't create instances.")
+            raise Exception(f'The RoboLogger class is a singleton - '
+                            f'can\'t create instances.')
         else:
             RoboLogger.__instance = self
             self.defaultLevel = defaultLevel
@@ -49,8 +49,9 @@ class RoboLogger(object):
         logger.setLevel(defaultLevel)
         ch = logging.StreamHandler()
         ch.setLevel(defaultLevel)
-        ch.setFormatter(logging.Formatter(fmt='%(asctime)s.%(msecs)03d:PID%(process)d:%(levelname)s:%(threadName)s:%(name)s:%(message)s',
-                                          datefmt='%Y-%m-%d %H:%M:%S'))
+        ch.setFormatter(logging.Formatter(
+            fmt='%(asctime)s.%(msecs)03d:PID%(process)d:%(levelname)s:%(threadName)s:%(name)s:%(message)s',    # noqa E501
+            datefmt='%Y-%m-%d %H:%M:%S'))
         logger.addHandler(ch)
         RoboLogger.__loggers.append(loggerName)
 
@@ -60,18 +61,23 @@ class RoboLogger(object):
         loggername:str:name of the current logger
         lvl:int (maybe):logging.DEBUG, logging.INFO, logging.WARNING, etc.
         '''
-        if lvl in [logging.DEBUG, logging.INFO, logging.WARNING, logging.ERROR, logging.CRITICAL]:
+        if lvl in [logging.DEBUG, logging.INFO, logging.WARNING,
+                   logging.ERROR, logging.CRITICAL]:
             if loggerName in RoboLogger.__loggers:
                 # change the level for the main logger
                 if lvl is not logging.getLogger(loggerName).level:
-                    logging.getLogger('root').critical(f'Changing logger \'{loggerName}\' level {logging.getLogger(loggerName).level} ==> {lvl}')
+                    logging.getLogger('root').critical(
+                        f'Changing logger \'{loggerName}\' level '
+                        f'{logging.getLogger(loggerName).level} ==> {lvl}')
                     logging.getLogger(loggerName).setLevel(lvl)
                 # change level for the handlers:
                 for handler in logging.getLogger(loggerName).handlers:
                     handler.setLevel(lvl)
             # logger doesn't yet exist
             else:
-                logging.getLogger('root').critical(f'Setting logging level on non existing logger - Creating logger \'{loggerName}\' with level {lvl}')
+                logging.getLogger('root').critical(
+                    f'Setting logging level on non existing logger - '
+                    f'Creating logger \'{loggerName}\' with level {lvl}')
                 self.__addNewLogger(loggerName, lvl)
 
     def critical(self, loggerName: str, msg: str, *args, **kwargs) -> None:
