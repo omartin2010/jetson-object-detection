@@ -6,9 +6,7 @@
 .vscode/.ropeproject
 lib*.so.*
 lib*.so*
-launch.json
-tasks.json
 **/*.png
 *.vsix
 *.avi
-.env.list
+.env

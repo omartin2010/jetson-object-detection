@@ -1,0 +1,66 @@
+{
+    // See https://go.microsoft.com/fwlink/?LinkId=733558
+    // for the documentation about the tasks.json format
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "launchObjectDetection",
+            "type": "shell",
+            "isBackground": false,
+            "command": [
+                "export DOCKER_CONTAINER_NAME=objectdetector-dev;",
+                "docker rm $DOCKER_CONTAINER_NAME;",
+                "export DISPLAY=:0;",
+                "xhost +si:localuser:root;",
+                "export DOCKER_IMG=objectdetector:latest;",
+                "export SCRIPT=\"src/startup.py\";",
+                "export CWD=\"/root/jetson-object-detection\";",
+                "export ROOT_CWD=\"/home/omartin/proj/jetson-object-detection\";",
+                "export DOCKER_ARGS=\"--privileged\";",
+                "export DOCKER_ARGS=\"$DOCKER_ARGS -d\";",
+                "export DOCKER_ARGS=\"$DOCKER_ARGS --name $DOCKER_CONTAINER_NAME\";",
+                "export DOCKER_ARGS=\"$DOCKER_ARGS --network host\";",
+                "export DOCKER_ARGS=\"$DOCKER_ARGS -e DISPLAY=$DISPLAY\";",
+                "export DOCKER_ARGS=\"$DOCKER_ARGS --env-file .env\";",
+                "export DOCKER_ARGS=\"$DOCKER_ARGS -v /tmp/.X11-unix:/tmp/.X11-unix\";",
+                "export DOCKER_ARGS=\"$DOCKER_ARGS -v $ROOT_CWD:$CWD\";",
+                "export DOCKER_ARGS=\"$DOCKER_ARGS -w $CWD\";",
+                "export CMD=\"python3 -m debugpy --connect 172.17.0.1:9999 $SCRIPT\";",
+                "export CMD_ARGS=\"--config_file config.json\";",
+                "echo args=$DOCKER_ARGS;",
+                "docker run $DOCKER_ARGS $DOCKER_IMG $CMD $CMD_ARGS;",
+            ],
+            "options": {
+                "shell": {
+                    "executable": "/bin/bash",
+                    "args": [
+                        "-c"
+                    ]
+                }
+            },
+            "problemMatcher": [
+                "$eslint-compact"
+            ]
+        },
+        {
+            "label": "stopObjectDetection",
+            "type": "shell",
+            "isBackground": false,
+            "command": [
+                "docker stop objectdetector-dev;",
+            ],
+            "options": {
+                "shell": {
+                    "executable": "/bin/bash",
+                    "args": [
+                        "-c"
+                    ]
+                }
+            },
+            "problemMatcher": [
+                "$eslint-compact"
+            ]
+        }
+
+    ]
+}
