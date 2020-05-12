@@ -1,5 +1,5 @@
 # NVIDIA Jetson TX2 Object Detection
-This is a subset of a (larger) project to do object detection (toy detection, really) on a Jetson TX2 powered Lego Robot. For example, here are samples of the two classes of objects the model included in this repo can detect :<br>
+This is a subset of a (larger) project ([here, the jetson-robot Lego project](https://github.com/omartin2010/jetson-robot)) to do object detection (toy detection, really) on a Jetson TX2 powered Lego Robot. For example, here are samples of the two classes of objects the model included in this repo can detect :<br>
 <br>
 Insert IMAGE 1 - class = Similar to lego blocks <br>
 Insert IMAGE 2 - class = Rubik Cube <br>
