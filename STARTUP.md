@@ -28,5 +28,6 @@ docker run --restart unless-stopped --privileged \
     --memory 2g \
     --memory-swap 3g \
     --cpus=2.5 \
+    --log-driver json-file --log-opt max-size=500k \
     objectdetector:latest
 ```
